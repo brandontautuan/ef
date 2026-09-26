@@ -75,9 +75,26 @@ For a private local experiment only:
 cd service
 source .venv/bin/activate
 huggingface-cli download evanlyhf/scut-fbp5500-beauty beauty_regressor.pt \
+  --revision 44c77683f3640a259aacff59a2d635875ec65729 \
   --local-dir models/scut-prototype-v1
-MODEL_DIR=models/scut-prototype-v1 uvicorn app.main:app --reload --port 8000
+sh start-research.sh
 ```
+
+The checkpoint is 94,363,765 bytes. Its SHA-256 is
+`54f55b2d03fe68b9bdb992d4992ea7d245b4dd25e0d376dca8f599463ff4a312`.
+On macOS, verify it with
+`shasum -a 256 models/scut-prototype-v1/beauty_regressor.pt`.
+The pinned revision and checksum identify the checkpoint expected by this
+research package; loading uses PyTorch's `weights_only=True` mode.
+
+From the repository root, `sh service/start-research.sh` starts this model on
+loopback port 8000 using the service virtual environment. For the browser, set
+`VITE_SCORE_ENDPOINT=http://localhost:8000/v1/score` in the root
+`.env.development.local` (git-ignored), then restart `npm run dev`.
+Check `http://localhost:8000/health`: `model_version` should be
+`scut-prototype@local-research-v1+imagenet-preprocess-v1`.
+Ordinary service startup without `MODEL_DIR` still selects the mock for tests
+and development. The existing display calibration remains unvalidated.
 
 Do not deploy this model package. Replace it with a licensed and reviewed model
 package, plus a fresh model version and calibration, before public launch.

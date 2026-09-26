@@ -1,6 +1,8 @@
 import React, { useCallback, useEffect, useRef, useState } from 'react';
 import { createRoot } from 'react-dom/client';
 import { FaceLandmarker, FilesetResolver } from '@mediapipe/tasks-vision';
+import { BlackCapsule } from './components/BlackCapsule';
+import { resultCopy } from './resultCopy';
 import './styles.css';
 
 type ScanState = 'idle' | 'permission' | 'acquiring' | 'sampling' | 'paused' | 'result' | 'error';
@@ -110,6 +112,7 @@ function App() {
   const streamRef = useRef<MediaStream | null>(null);
   const activeScanId = useRef('');
   const samplingTimer = useRef<number | null>(null);
+  const startupTimer = useRef<number | null>(null);
   const overallTimer = useRef<number | null>(null);
   const requestInFlight = useRef(false);
   const sequence = useRef(0);
@@ -127,6 +130,8 @@ function App() {
   const [progress, setProgress] = useState(0);
   const [result, setResult] = useState<{ score: number; tier: string; modelVersion: string; nativeScores: number[]; medianNativeScore: number } | null>(null);
   const [faceFree, setFaceFree] = useState(false);
+  const [introPlaying, setIntroPlaying] = useState(false);
+  const [introSequence, setIntroSequence] = useState(0);
   const [hud, setHud] = useState<{ faces: number; box: { l: number; t: number; w: number; h: number } | null; eligible: boolean; note: string }>({ faces: 0, box: null, eligible: false, note: 'INITIALIZING' });
 
   useEffect(() => { stateRef.current = state; }, [state]);
@@ -138,10 +143,12 @@ function App() {
   }, []);
 
   const clearScanTimers = useCallback(() => {
+    if (startupTimer.current) window.clearTimeout(startupTimer.current);
     if (samplingTimer.current) window.clearInterval(samplingTimer.current);
     if (overallTimer.current) window.clearTimeout(overallTimer.current);
     samplingTimer.current = null;
     overallTimer.current = null;
+    startupTimer.current = null;
   }, []);
 
   const stopTracking = useCallback(() => {
@@ -158,11 +165,19 @@ function App() {
     sequence.current = 0;
     predictions.current = [];
     requestInFlight.current = false;
+    validSinceRef.current = null;
+    previousFaceCenterRef.current = null;
     setProgress(0);
     setResult(null);
   }, [clearScanTimers]);
 
-  useEffect(() => () => { clearScanTimers(); stopTracking(); stopCamera(); }, [clearScanTimers, stopCamera, stopTracking]);
+  useEffect(() => () => { activeScanId.current = makeScanId(); clearScanTimers(); stopTracking(); stopCamera(); }, [clearScanTimers, stopCamera, stopTracking]);
+
+  useEffect(() => {
+    if (state === 'result' || state === 'error' || state === 'idle') {
+      clearScanTimers(); stopTracking(); stopCamera();
+    }
+  }, [state, clearScanTimers, stopTracking, stopCamera]);
 
   useEffect(() => {
     const onVisibility = () => {
@@ -377,7 +392,7 @@ function App() {
         setMessage(error instanceof Error ? error.message : 'Scoring failed. Please retry.');
       }
     } finally {
-      requestInFlight.current = false;
+      if (scanId === activeScanId.current) requestInFlight.current = false;
     }
   }, [assessFrame, captureFrame, clearScanTimers, finish]);
 
@@ -385,11 +400,11 @@ function App() {
     stateRef.current = 'sampling';
     setState('sampling');
     setMessage('Hold that pose…');
-    window.setTimeout(() => void sample(), 250);
+    startupTimer.current = window.setTimeout(() => void sample(), 250);
     samplingTimer.current = window.setInterval(() => void sample(), SAMPLE_INTERVAL_MS);
   }, [sample]);
 
-  const initializeTracker = useCallback(async () => {
+  const initializeTracker = useCallback(async (scanId: string) => {
     const vision = await FilesetResolver.forVisionTasks('https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@latest/wasm');
     const tracker = await FaceLandmarker.createFromOptions(vision, {
       baseOptions: { modelAssetPath: 'https://storage.googleapis.com/mediapipe-models/face_landmarker/face_landmarker/float16/latest/face_landmarker.task' },
@@ -398,6 +413,7 @@ function App() {
       outputFaceBlendshapes: true,
       outputFacialTransformationMatrixes: true,
     });
+    if (scanId !== activeScanId.current) { tracker.close(); return; }
     trackerRef.current = tracker;
     const detect = () => {
       const video = videoRef.current;
@@ -415,7 +431,7 @@ function App() {
             const scale = Math.max(rect.width / video.videoWidth, rect.height / video.videoHeight);
             const width = video.videoWidth * scale; const height = video.videoHeight * scale;
             const offsetX = (rect.width - width) / 2; const offsetY = (rect.height - height) / 2;
-            context.fillStyle = '#d7ff36';
+            context.fillStyle = '#e5e2dc';
             for (const point of facesRef.current[0] ?? []) context.fillRect(rect.width - (point.x * width + offsetX) - 1, point.y * height + offsetY - 1, 2, 2);
           }
         }
@@ -431,27 +447,33 @@ function App() {
       setMessage('This browser does not support camera access. Try a current Chrome or Safari browser.');
       return;
     }
-    resetScan();
-    setState('permission');
+    stopTracking(); stopCamera(); resetScan();
+    const scanId = activeScanId.current;
+    setIntroSequence((value) => value + 1);
+    setIntroPlaying(true);
+    stateRef.current = 'permission'; setState('permission');
     setMessage('Allow camera access to begin your live scan.');
     try {
       const stream = await navigator.mediaDevices.getUserMedia({ video: { facingMode: 'user', width: { ideal: 1280 }, height: { ideal: 1280 } }, audio: false });
+      if (scanId !== activeScanId.current) { stream.getTracks().forEach((track) => track.stop()); return; }
       streamRef.current = stream;
       if (videoRef.current) {
         videoRef.current.srcObject = stream;
         await videoRef.current.play();
       }
-      await initializeTracker();
+      await initializeTracker(scanId);
+      if (scanId !== activeScanId.current) return;
       scanDebug('camera_started', { scanId: activeScanId.current, tracker: 'MediaPipe Face Landmarker', requiredFrames: REQUIRED_PREDICTIONS });
       setState('acquiring');
       setMessage('Center your face in the frame');
-      window.setTimeout(beginSampling, 800);
+      startupTimer.current = window.setTimeout(beginSampling, 800);
       overallTimer.current = window.setTimeout(() => {
         clearScanTimers();
         setState('error');
         setMessage('The scan timed out. Try again in brighter, steadier light.');
       }, SCAN_TIMEOUT_MS);
     } catch {
+      if (scanId !== activeScanId.current) return;
       stopTracking();
       stopCamera();
       setState('error');
@@ -461,6 +483,8 @@ function App() {
 
   const scanAgain = useCallback(() => { stopTracking(); stopCamera(); void startCamera(); }, [startCamera, stopCamera, stopTracking]);
   const exitScan = useCallback(() => {
+    setIntroPlaying(false);
+    activeScanId.current = makeScanId();
     clearScanTimers(); stopTracking(); stopCamera(); stateRef.current = 'idle'; setState('idle'); setMessage('Camera stays off until you start.'); setProgress(0); setResult(null);
   }, [clearScanTimers, stopCamera, stopTracking]);
 
@@ -470,25 +494,45 @@ function App() {
     canvas.width = 1080; canvas.height = 1350;
     const context = canvas.getContext('2d');
     if (!context) return;
-    const gradient = context.createLinearGradient(0, 0, 1080, 1350);
-    gradient.addColorStop(0, '#ef5a37'); gradient.addColorStop(0.45, '#d7ff36'); gradient.addColorStop(1, '#5c41f0');
-    context.fillStyle = gradient; context.fillRect(0, 0, canvas.width, canvas.height);
-    context.fillStyle = '#080a12'; context.font = '800 48px Arial'; context.fillText('MOG / LIVE SCAN', 72, 100);
-    if (!faceFree && frameCanvasRef.current) context.drawImage(frameCanvasRef.current, 72, 180, 936, 720);
-    context.fillStyle = '#080a12'; context.font = '900 220px Arial'; context.fillText(String(result.score), 70, faceFree ? 650 : 1130);
-    context.font = '800 54px Arial'; context.fillText(result.tier, 75, faceFree ? 730 : 1215);
-    context.font = '500 25px Arial'; context.fillText('A model estimate from this scan — for entertainment.', 75, 1285);
+    context.fillStyle = '#090909'; context.fillRect(0, 0, canvas.width, canvas.height);
+    context.strokeStyle = '#343434'; context.strokeRect(35, 35, 1010, 1280);
+    context.fillStyle = '#ece9e2'; context.font = '900 42px Arial'; context.fillText('MOG / SCAN', 72, 112);
+    context.fillStyle = '#ee553d'; context.font = '20px monospace'; context.fillText('THE BLACK CAPSULE', 720, 108);
+    if (!faceFree && frameCanvasRef.current) context.drawImage(frameCanvasRef.current, 0, 115, 640, 410, 72, 165, 936, 600);
+    const scoreY = faceFree ? 640 : 1000;
+    context.fillStyle = '#ece9e2'; context.font = '900 220px Arial'; context.fillText(String(result.score), 65, scoreY);
+    const scoreWidth = context.measureText(String(result.score)).width;
+    context.fillStyle = '#92908b'; context.font = '500 70px Arial'; context.fillText('/100', 82 + scoreWidth, scoreY);
+    context.fillStyle = '#ee553d'; context.font = '800 40px Arial'; context.fillText(result.tier, 75, scoreY + 65);
+    context.fillStyle = '#ece9e2'; context.font = '700 40px Arial'; context.fillText(resultCopy[result.tier].headline, 75, scoreY + 140, 930);
+    context.fillStyle = '#92908b'; context.font = '22px Arial'; context.fillText('A model estimate. A roast. Not a measure of your worth.', 75, 1265);
     const link = document.createElement('a'); link.download = 'mog-scan-result.png'; link.href = canvas.toDataURL('image/png'); link.click();
   }, [faceFree, result]);
 
   const active = ['permission', 'acquiring', 'sampling', 'paused'].includes(state);
   const tracking = state === 'acquiring' || state === 'sampling' || state === 'paused';
   const framesDone = Math.round((progress / 100) * REQUIRED_PREDICTIONS);
+  const verdict = result ? resultCopy[result.tier] : null;
   return <main className="app-shell">
-    <header><a className="brand" href="#top" onClick={exitScan}>MOG<span>/</span>SCAN</a><span className="status"><i className={active ? 'live' : ''} />{active ? 'CAMERA ACTIVE' : 'CAMERA OFF'}</span></header>
+    <header>
+      <a className="brand" href="#top" onClick={exitScan}><i className="brand-capsule" />MOG<span>/</span>SCAN</a>
+      <span className="edition">THE BLACK CAPSULE <span>VOL. 001</span></span>
+      <span className="status"><i className={tracking ? 'live' : ''} />{state === 'permission' ? 'AWAITING CAMERA' : tracking ? 'CAMERA ACTIVE' : 'CAMERA OFF'}</span>
+    </header>
     <section className={`scan-card ${state}`}>
+      <div className="stage-label"><span>UNFILTERED / UNSERIOUS</span><span>{state === 'idle' ? 'READY WHEN YOU ARE' : state === 'result' ? 'VERDICT DELIVERED' : 'LIVE SESSION'}</span></div>
       <div className="video-stage">
-        {state === 'idle' && <div className="hero"><p className="eyebrow">LIVE CAMERA EXPERIENCE</p><h1>Find your<br /><em>frame.</em></h1><p>Three steady moments. One model estimate. No uploads until your scan starts.</p><button className="primary" onClick={() => void startCamera()}>Start scan <b>↗</b></button></div>}
+        {state === 'idle' && <div className="hero">
+          <div className="hero-copy">
+            <p className="eyebrow"><span className="tiny-cross">✳</span> A SMALL DOSE OF EGO CHECK</p>
+            <h1>Take the<br /><em>black pill.</em></h1>
+            <p className="hero-description">Three frames. One score. Zero glazing.<br />Your camera roll is about to get humbled.</p>
+            <button className="primary start-button" onClick={() => void startCamera()}>Start scan <span aria-hidden="true">↗</span></button>
+            <p className="consent-note">Camera starts on your say-so. Selected frames only.</p>
+          </div>
+          <BlackCapsule />
+          <div className="hero-bottom"><span><b>01</b> FACE THE CAMERA</span><span><b>02</b> HOLD YOUR POSE</span><span><b>03</b> TAKE THE ROAST</span></div>
+        </div>}
         {state !== 'idle' && state !== 'result' && <>
           <video ref={videoRef} muted playsInline autoPlay />
           <canvas ref={overlayRef} className="landmark-overlay" />
@@ -514,12 +558,28 @@ function App() {
             </div>}
            </div>}
          </>}
-        {state === 'result' && result && <div className="reveal"><p className="eyebrow">SCAN COMPLETE</p><div className="score">{result.score}</div><div className="tier">{result.tier}</div><p>Model estimate from this scan.<br />Not an objective measure of attractiveness.</p><section className="level-up"><p className="eyebrow">ASCENDING PATH</p><p>One optional general style and presentation guide for your next tier.</p>{tierPlaybooks.slice(Math.max(0, tierPlaybooks.findIndex((playbook) => playbook.tier === result.tier) + 1), Math.max(0, tierPlaybooks.findIndex((playbook) => playbook.tier === result.tier) + 2)).map((playbook) => <details key={playbook.tier}><summary>ASCENDING TO <b>{playbook.tier}</b> · {playbook.title}</summary><ol>{playbook.steps.map((step) => <li key={step}>{step}</li>)}</ol></details>)}</section>{scanDebugEnabled && <details className="diagnostics" open><summary>How this result was calculated</summary><div><span>Valid frames</span><b>{result.nativeScores.map((value) => value.toFixed(3)).join(' · ')}</b></div><div><span>Aggregation</span><b>Median: {result.medianNativeScore.toFixed(3)} / 5</b></div><div><span>Display map</span><b>((native − 2.3) ÷ 1.6) × 100</b></div><div><span>Model</span><b>{result.modelVersion}</b></div></details>}<div className="actions"><button className="primary" onClick={scanAgain}>Scan again <b>↗</b></button><button className="secondary" onClick={downloadCard}>Save card</button></div><label className="toggle"><input type="checkbox" checked={faceFree} onChange={(event) => setFaceFree(event.target.checked)} /> Face-free card</label></div>}
-        {state === 'error' && <div className="error-panel"><p className="eyebrow">SCAN PAUSED</p><h2>Let’s try that again.</h2><p>{message}</p><button className="primary" onClick={() => void startCamera()}>Retry <b>↗</b></button><button className="text-button" onClick={exitScan}>Back home</button></div>}
+        {state === 'result' && result && verdict && <div className="reveal">
+          <p className="eyebrow">THE RESULTS ARE IN. BRACE YOURSELF.</p>
+          <div className="score" aria-label={`${result.score} out of 100`}><span>{result.score}</span><small>/100</small></div>
+          <div className="tier"><span className="tier-mark" />{result.tier}</div>
+          <h2 className="verdict">{verdict.headline}</h2>
+          <p className="verdict-detail">{verdict.detail}</p>
+          <div className="actions"><button className="primary" onClick={scanAgain}>Run it back <span aria-hidden="true">↗</span></button><button className="secondary" onClick={downloadCard}>Save the receipt <span aria-hidden="true">↓</span></button></div>
+          <label className="toggle"><input type="checkbox" checked={faceFree} onChange={(event) => setFaceFree(event.target.checked)} /> Keep my face off the card</label>
+          <section className="level-up">
+            {tierPlaybooks.slice(Math.max(0, tierPlaybooks.findIndex((playbook) => playbook.tier === result.tier) + 1), Math.max(0, tierPlaybooks.findIndex((playbook) => playbook.tier === result.tier) + 2)).map((playbook) => <details key={playbook.tier}><summary>Your next move <span>+</span></summary><p>General style ideas, not an explanation of your score.</p><ol>{playbook.steps.map((step) => <li key={step}>{step}</li>)}</ol></details>)}
+          </section>
+          {scanDebugEnabled && <details className="diagnostics"><summary>How this result was calculated</summary><div><span>Valid frames</span><b>{result.nativeScores.map((value) => value.toFixed(3)).join(' · ')}</b></div><div><span>Aggregation</span><b>Median: {result.medianNativeScore.toFixed(3)} / 5</b></div><div><span>Display map</span><b>((native − 2.3) ÷ 1.6) × 100</b></div><div><span>Model</span><b>{result.modelVersion}</b></div></details>}
+          <p className="result-disclaimer">A model estimate. A roast. Not a measure of your worth.</p>
+        </div>}
+        {state === 'error' && <div className="error-panel"><p className="eyebrow">TECHNICAL FOUL</p><h2>The scan flinched.</h2><p>{message}</p><button className="primary" onClick={() => void startCamera()}>Retry <span aria-hidden="true">↗</span></button><button className="text-button" onClick={exitScan}>Back home</button></div>}
+        {introPlaying && <div key={introSequence} className="scan-intro" aria-hidden="true" onAnimationEnd={(event) => { if (event.target === event.currentTarget) setIntroPlaying(false); }}>
+          <p className="eyebrow">BREAKING THE SEAL</p><BlackCapsule opening /><span className="intro-caption">EGO CHECK INCOMING.</span>
+        </div>}
       </div>
-      {active && <div className="scan-controls"><div className="progress-line"><span style={{ width: `${progress}%` }} /></div><p>{message}</p><button className="exit" onClick={exitScan}>End scan</button></div>}
+      {active && <div className="scan-controls"><div className="progress-line" role="progressbar" aria-label="Scan progress" aria-valuenow={progress} aria-valuemin={0} aria-valuemax={100}><span style={{ width: `${progress}%` }} /></div><p role="status">{message}</p><button className="exit" onClick={exitScan}>End scan</button></div>}
     </section>
-    <footer><span>PRIVATE BY DEFAULT</span><span>SELECTED FRAMES ONLY</span><span>NO SAVED SCANS</span></footer>
+    <footer><span>THICK SKIN. GOOD LIGHTING.</span><span>FOR ENTERTAINMENT. NOT OBJECTIVE TRUTH.</span><span>MOG / SCAN © {new Date().getFullYear()}</span></footer>
     <canvas ref={frameCanvasRef} className="hidden" /><canvas ref={qualityCanvasRef} className="hidden" />
   </main>;
 }
