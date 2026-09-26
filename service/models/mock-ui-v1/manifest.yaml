@@ -1,0 +1,14 @@
+# Immutable model manifest — source of truth for preprocessing and output range.
+# This is the MOCK/STAGING package. It ships no licensed weights and must not be
+# used for any public rating. Replace with a licensed, reviewed package (and a
+# new model_version) before clearing the launch gate.
+
+model_version: mock-model@staging-000+preprocess-v1
+native_score_range: [1.0, 5.0]
+input:
+  color_space: RGB
+  dimensions: [224, 224]          # [width, height]
+  normalization: scale-0-1        # per-channel policy documented in preprocess.py
+  alignment: client-supplied-centered-crop
+license_review: mock-only-not-for-public-rating
+is_mock: true
