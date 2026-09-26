@@ -23,16 +23,15 @@ const prompts: Record<QualityFailure, string> = {
   motion: 'Hold steady',
 };
 
-const jokeLines: Partial<Record<QualityFailure, string>> = {
-  dark: 'Your lighting was auditioning for a witness-protection documentary. Find softer front light.',
-  pose: 'The camera asked for front-facing; your head chose an avant-garde side quest.',
-  motion: 'Hold still—the lens cannot rate a plot twist.',
-  blur: 'Give the autofocus a chance to learn your lore.',
-  too_small: 'Move closer. The camera needs a lead actor, not background casting.',
-  cut_off: 'Keep your whole face in frame; the crop was being a little too editorial.',
-  no_face: 'The scan needs one willing protagonist in frame.',
-  multiple_faces: 'One protagonist at a time—the ensemble cast confused the scanner.',
-};
+const tierPlaybooks = [
+  { tier: 'LTN', title: 'Foundation', steps: ['Use consistent sleep, simple skincare, and daily sun protection.', 'Choose a haircut and grooming routine that keeps your face clearly visible.', 'Take repeat scans in even daylight or soft front light.'] },
+  { tier: 'MTN', title: 'Consistency', steps: ['Keep clothes clean, well-fitted, and intentional rather than chasing every trend.', 'Maintain a repeatable hair, skin, and grooming routine.', 'Use eye-level camera height and relaxed posture in photos.'] },
+  { tier: 'HTN', title: 'Polish', steps: ['Refine fit, color coordination, and grooming details that feel like you.', 'Build habits you can sustain: movement, rest, and basic self-care.', 'Use clean lighting and a calm expression for a more consistent camera result.'] },
+  { tier: 'CHADLITE', title: 'Presence', steps: ['Lean into a recognizable personal style instead of over-optimizing every feature.', 'Keep posture, hair, and wardrobe consistent across photos and in person.', 'Rescan under similar lighting before judging small score changes.'] },
+  { tier: 'CHAD', title: 'Refinement', steps: ['Prioritize confidence, fit, and grooming consistency over drastic changes.', 'Experiment with styling one variable at a time so you know what you prefer.', 'Treat score movement as model noise unless repeated scans agree.'] },
+  { tier: 'ADAM', title: 'Signature', steps: ['Keep the habits and style choices that already feel authentic to you.', 'Use the app as entertainment, not a rulebook for your appearance.', 'Help keep the vibe positive—do not rank or scan other people.'] },
+  { tier: 'TRUE ADAM', title: 'Final form', steps: ['There is no higher unlock. Keep your own standards, not the model’s.', 'Stay grounded: a camera score is not a measurement of worth.', 'Use the share card only if you genuinely want to.'] },
+] as const;
 
 function makeScanId() {
   return crypto.randomUUID?.() ?? `${Date.now()}-${Math.random().toString(16).slice(2)}`;
@@ -75,18 +74,6 @@ function isMediaSupported() {
 
 function scanDebug(event: string, details: Record<string, unknown>) {
   if (scanDebugEnabled) console.info(`[MOG scan] ${event}`, details);
-}
-
-function scanJokes(failures: Record<QualityFailure, number>) {
-  const observed = (Object.entries(failures) as Array<[QualityFailure, number]>)
-    .filter(([, count]) => count > 0)
-    .sort((a, b) => b[1] - a[1])
-    .map(([reason]) => jokeLines[reason])
-    .filter((line): line is string => Boolean(line));
-  return observed.slice(0, 2).length ? observed.slice(0, 2) : [
-    'Clean capture. The camera had no notes—suspiciously professional behavior.',
-    'Your framing stayed locked. Keep that same energy on the next scan.',
-  ];
 }
 
 async function scoreFrame(canvas: HTMLCanvasElement, scanId: string, sequence: number): Promise<Prediction> {
@@ -135,11 +122,10 @@ function App() {
   const qualityCanvasRef = useRef<HTMLCanvasElement>(null);
   const previousFaceCenterRef = useRef<{ x: number; y: number; at: number } | null>(null);
   const validSinceRef = useRef<number | null>(null);
-  const qualityFailuresRef = useRef<Record<QualityFailure, number>>({ no_face: 0, multiple_faces: 0, too_small: 0, cut_off: 0, pose: 0, dark: 0, blur: 0, motion: 0 });
   const [state, setState] = useState<ScanState>('idle');
   const [message, setMessage] = useState('Camera stays off until you start.');
   const [progress, setProgress] = useState(0);
-  const [result, setResult] = useState<{ score: number; tier: string; modelVersion: string; nativeScores: number[]; medianNativeScore: number; jokes: string[] } | null>(null);
+  const [result, setResult] = useState<{ score: number; tier: string; modelVersion: string; nativeScores: number[]; medianNativeScore: number } | null>(null);
   const [faceFree, setFaceFree] = useState(false);
   const [hud, setHud] = useState<{ faces: number; box: { l: number; t: number; w: number; h: number } | null; eligible: boolean; note: string }>({ faces: 0, box: null, eligible: false, note: 'INITIALIZING' });
 
@@ -172,7 +158,6 @@ function App() {
     sequence.current = 0;
     predictions.current = [];
     requestInFlight.current = false;
-    qualityFailuresRef.current = { no_face: 0, multiple_faces: 0, too_small: 0, cut_off: 0, pose: 0, dark: 0, blur: 0, motion: 0 };
     setProgress(0);
     setResult(null);
   }, [clearScanTimers]);
@@ -331,7 +316,7 @@ function App() {
       tier: tierFor(score),
       modelVersion,
     });
-    setResult({ score, tier: tierFor(score), modelVersion, nativeScores, medianNativeScore, jokes: scanJokes(qualityFailuresRef.current) });
+    setResult({ score, tier: tierFor(score), modelVersion, nativeScores, medianNativeScore });
     setState('result');
     setMessage('Result locked from this scan.');
   }, [clearScanTimers]);
@@ -343,7 +328,6 @@ function App() {
     if (stateRef.current !== 'sampling' && stateRef.current !== 'paused') return;
     const assessment = assessFrame();
     if (!assessment.eligible) {
-      qualityFailuresRef.current[assessment.failures[0]] += 1;
       scanDebug('frame_rejected', { reason: assessment.failures[0], allFailures: assessment.failures, scanId: activeScanId.current });
       validSinceRef.current = null;
       if (stateRef.current !== 'paused') {
@@ -530,7 +514,7 @@ function App() {
             </div>}
            </div>}
          </>}
-        {state === 'result' && result && <div className="reveal"><p className="eyebrow">SCAN COMPLETE</p><div className="score">{result.score}</div><div className="tier">{result.tier}</div><p>Model estimate from this scan.<br />Not an objective measure of attractiveness.</p><section className="joke-card"><p className="eyebrow">JOKE MODE · CAMERA NOTES</p>{result.jokes.map((joke) => <p key={joke}>{joke}</p>)}<small>Fictional camera commentary—not health or appearance advice.</small></section>{scanDebugEnabled && <details className="diagnostics" open><summary>How this result was calculated</summary><div><span>Valid frames</span><b>{result.nativeScores.map((value) => value.toFixed(3)).join(' · ')}</b></div><div><span>Aggregation</span><b>Median: {result.medianNativeScore.toFixed(3)} / 5</b></div><div><span>Display map</span><b>((native − 1.8) ÷ 2) × 100</b></div><div><span>Model</span><b>{result.modelVersion}</b></div></details>}<div className="actions"><button className="primary" onClick={scanAgain}>Scan again <b>↗</b></button><button className="secondary" onClick={downloadCard}>Save card</button></div><label className="toggle"><input type="checkbox" checked={faceFree} onChange={(event) => setFaceFree(event.target.checked)} /> Face-free card</label></div>}
+        {state === 'result' && result && <div className="reveal"><p className="eyebrow">SCAN COMPLETE</p><div className="score">{result.score}</div><div className="tier">{result.tier}</div><p>Model estimate from this scan.<br />Not an objective measure of attractiveness.</p><section className="level-up"><p className="eyebrow">ASCENDING PATHS</p><p>Optional general style and presentation guides. Only paths above your current tier are shown.</p>{tierPlaybooks.slice(Math.max(0, tierPlaybooks.findIndex((playbook) => playbook.tier === result.tier) + 1)).map((playbook) => <details key={playbook.tier}><summary>ASCENDING TO <b>{playbook.tier}</b> · {playbook.title}</summary><ol>{playbook.steps.map((step) => <li key={step}>{step}</li>)}</ol></details>)}</section>{scanDebugEnabled && <details className="diagnostics" open><summary>How this result was calculated</summary><div><span>Valid frames</span><b>{result.nativeScores.map((value) => value.toFixed(3)).join(' · ')}</b></div><div><span>Aggregation</span><b>Median: {result.medianNativeScore.toFixed(3)} / 5</b></div><div><span>Display map</span><b>((native − 1.8) ÷ 2) × 100</b></div><div><span>Model</span><b>{result.modelVersion}</b></div></details>}<div className="actions"><button className="primary" onClick={scanAgain}>Scan again <b>↗</b></button><button className="secondary" onClick={downloadCard}>Save card</button></div><label className="toggle"><input type="checkbox" checked={faceFree} onChange={(event) => setFaceFree(event.target.checked)} /> Face-free card</label></div>}
         {state === 'error' && <div className="error-panel"><p className="eyebrow">SCAN PAUSED</p><h2>Let’s try that again.</h2><p>{message}</p><button className="primary" onClick={() => void startCamera()}>Retry <b>↗</b></button><button className="text-button" onClick={exitScan}>Back home</button></div>}
       </div>
       {active && <div className="scan-controls"><div className="progress-line"><span style={{ width: `${progress}%` }} /></div><p>{message}</p><button className="exit" onClick={exitScan}>End scan</button></div>}
