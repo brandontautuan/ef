@@ -1,0 +1,12 @@
+# PRIVATE RESEARCH PROTOTYPE ONLY. SCUT-FBP5500 and derived weights are not
+# approved for public or commercial deployment.
+model_version: scut-prototype@local-research-v1+imagenet-preprocess-v1
+native_score_range: [1.0, 5.0]
+input:
+  color_space: RGB
+  dimensions: [224, 224]
+  normalization: imagenet
+  alignment: client-supplied-centered-crop
+license_review: research-only-scut-fbp5500
+is_mock: false
+weights_file: beauty_regressor.pt

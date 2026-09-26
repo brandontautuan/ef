@@ -21,6 +21,14 @@ def test_health(client):
     assert "@staging" in body["model_version"]  # mock package is active
 
 
+def test_calibration_matches_active_model_and_tiers(client):
+    body = client.get("/v1/calibration").json()
+    assert body["modelVersion"] == client.get("/health").json()["model_version"]
+    assert [tier["label"] for tier in body["tiers"]] == [
+        "TRUE ADAM", "ADAM", "CHAD", "CHADLITE", "HTN", "MTN", "LTN", "SUB5"
+    ]
+
+
 def test_score_success_schema(client, jpeg_bytes):
     r = _post(client, image=jpeg_bytes)
     assert r.status_code == 200

@@ -45,11 +45,15 @@ def preprocess(img: Image.Image, manifest: Manifest) -> list[float]:
     target_w, target_h = manifest.dimensions
     rgb = img.convert("RGB") if manifest.input.color_space.upper() == "RGB" else img.convert("RGB")
     resized = rgb.resize((target_w, target_h), Image.BILINEAR)
-    # Normalize to [0, 1]; the manifest documents the per-channel policy.
+    # Normalize exactly as declared by the immutable model manifest.
     pixels = list(resized.getdata())  # list of (r, g, b)
     out: list[float] = []
-    for r, g, b in pixels:
-        out.append(r / 255.0)
-        out.append(g / 255.0)
-        out.append(b / 255.0)
+    if manifest.input.normalization == "imagenet":
+        mean = (0.485, 0.456, 0.406); std = (0.229, 0.224, 0.225)
+        for r, g, b in pixels:
+            for value, channel_mean, channel_std in zip((r, g, b), mean, std):
+                out.append((value / 255.0 - channel_mean) / channel_std)
+    else:
+        for r, g, b in pixels:
+            out.extend((r / 255.0, g / 255.0, b / 255.0))
     return out

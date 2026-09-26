@@ -96,11 +96,26 @@ type DisplayScoreConfig = {
   modelVersion: string;
   nativeMin: number;
   nativeMax: number;
-  tiers: Array<{ minInclusive: number; label: string }>;
+  tiers: Array<{ minInclusive: number; maxInclusive: number; label: string; targetShare: number }>;
 };
 ```
 
 The client must not invent or silently change a scale. It should record the returned model version with the current in-memory result and refuse mixed-version predictions in one scan. The final view includes a concise “model estimate from this scan” note.
+
+### Current tier configuration
+
+| Tier | Display score | Target share of valid scans | Approx. per 10,000 distinct people |
+| --- | ---: | ---: | ---: |
+| `TRUE ADAM` | 99–100 | 0.05% | 5 |
+| `ADAM` | 95–98 | 0.45% | 45 |
+| `CHAD` | 88–94 | 1.5% | 150 |
+| `CHADLITE` | 80–87 | 3% | 300 |
+| `HTN` | 70–79 | 15% | 1,500 |
+| `MTN` | 60–69 | 35% | 3,500 |
+| `LTN` | 50–59 | 30% | 3,000 |
+| `SUB5` | 0–49 | 15% | 1,500 |
+
+The target share is a post-validation calibration objective across valid scans; it is not an individual’s percentile or a promise that live traffic will exactly match this distribution. The client uses only the range-to-label mapping above.
 
 ## 8. Components and ownership inside the client
 
@@ -136,4 +151,3 @@ If enabled, emit only aggregate-safe events such as `camera_started`, `camera_de
 1. **Contract stub:** Implement the state machine against a mock `ScoreClient`; service owner confirms request/response fixture.
 2. **Integration:** Exercise real success, validation error, timeout, and stale-response cases against staging.
 3. **Joint device test:** Test current Chrome/Safari mobile and desktop Chromium with a defined set of lighting, movement, and face-count scenarios.
-

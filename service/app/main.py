@@ -9,6 +9,7 @@ logged.
 from __future__ import annotations
 
 import asyncio
+import json
 import os
 import time
 from contextlib import asynccontextmanager
@@ -55,7 +56,10 @@ def _error_response(err: ServiceError, request_id: str) -> JSONResponse:
 async def lifespan(app: FastAPI):
     configure_logging()
     app.state.manifest = load_manifest(settings.model_dir)
-    app.state.runner = build_runner(app.state.manifest)
+    app.state.calibration = json.loads((settings.model_dir / "calibration.json").read_text())
+    if app.state.calibration.get("modelVersion") != app.state.manifest.model_version:
+        raise RuntimeError("Calibration modelVersion must match the active model manifest.")
+    app.state.runner = build_runner(app.state.manifest, settings.model_dir)
     app.state.admission = Admission(settings.max_concurrency, settings.max_queue)
     app.state.rate_limiter = RateLimiter(
         settings.rate_limit_requests, settings.rate_limit_window_s
@@ -99,6 +103,12 @@ async def _unexpected_handler(request: Request, exc: Exception) -> JSONResponse:
 async def health() -> dict:
     manifest = app.state.manifest
     return {"status": "ok", "model_version": manifest.model_version}
+
+
+@app.get("/v1/calibration")
+async def calibration() -> dict:
+    """Public, versioned display mapping; contains no user or image data."""
+    return app.state.calibration
 
 
 def _client_ip(request: Request) -> str:

@@ -59,3 +59,24 @@ Errors: `{ "error": { "code", "message" }, "request_id" }` with statuses
 preprocessing and output range; `calibration.json` is the reviewed display map
 handed to the client (native scale → 0–100 + tiers). Any change to weights,
 transform, range, or calibration ships as a new `model_version`.
+
+## Local SCUT research prototype
+
+`models/scut-prototype-v1` is wired to run the public SCUT-FBP5500 research
+weights locally after `beauty_regressor.pt` is downloaded into that directory.
+The weight file is git-ignored and the package manifest is explicitly marked
+`research-only-scut-fbp5500`. The underlying dataset/model terms do **not**
+approve public or commercial use.
+
+For a private local experiment only:
+
+```sh
+cd service
+source .venv/bin/activate
+huggingface-cli download evanlyhf/scut-fbp5500-beauty beauty_regressor.pt \
+  --local-dir models/scut-prototype-v1
+MODEL_DIR=models/scut-prototype-v1 uvicorn app.main:app --reload --port 8000
+```
+
+Do not deploy this model package. Replace it with a licensed and reviewed model
+package, plus a fresh model version and calibration, before public launch.

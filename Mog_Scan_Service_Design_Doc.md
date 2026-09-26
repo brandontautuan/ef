@@ -89,12 +89,19 @@ The service owner supplies a reviewed configuration to the client owner for each
   "nativeMin": 1.0,
   "nativeMax": 5.0,
   "tiers": [
-    { "minInclusive": 0, "label": "..." }
+    { "minInclusive": 99, "maxInclusive": 100, "label": "TRUE ADAM", "targetShare": 0.0005 },
+    { "minInclusive": 95, "maxInclusive": 98, "label": "ADAM", "targetShare": 0.0045 },
+    { "minInclusive": 88, "maxInclusive": 94, "label": "CHAD", "targetShare": 0.015 },
+    { "minInclusive": 80, "maxInclusive": 87, "label": "CHADLITE", "targetShare": 0.03 },
+    { "minInclusive": 70, "maxInclusive": 79, "label": "HTN", "targetShare": 0.15 },
+    { "minInclusive": 60, "maxInclusive": 69, "label": "MTN", "targetShare": 0.35 },
+    { "minInclusive": 50, "maxInclusive": 59, "label": "LTN", "targetShare": 0.30 },
+    { "minInclusive": 0, "maxInclusive": 49, "label": "SUB5", "targetShare": 0.15 }
   ]
 }
 ```
 
-The mapping may linearly transform a native research-model scale to 0–100 for the prototype, but it must never be called a percentile or population calibration. Choose tier boundaries only after inspecting consented evaluation distributions. The service and client owners approve a mapping together, version it, and do not mix prediction versions in a scan.
+The target shares translate to approximately 5, 45, 150, 300, 1,500, 3,500, 3,000, and 1,500 per 10,000 distinct people, respectively. They are calibration targets measured on an appropriately consented evaluation set, not a percentile displayed to a person or a guaranteed live-traffic distribution. The mapping may linearly transform a native research-model scale to 0–100 for the prototype, but it must never be called a percentile or population calibration. Choose tier boundaries only after inspecting consented evaluation distributions. The service and client owners approve a mapping together, version it, and do not mix prediction versions in a scan.
 
 ## 7. Security, abuse, and reliability
 
@@ -135,4 +142,3 @@ The mapping may linearly transform a native research-model scale to 0–100 for 
 1. **Contract fixture:** Give Engineer A a multipart example plus success and error fixtures, exact limits, timeouts, and staging URL/CORS origin.
 2. **Calibration handoff:** Provide the model manifest and reviewed display-score configuration before real-client integration.
 3. **Joint privacy and device test:** Verify selected-frame-only uploads, stale request behavior, service failure UX, logs, and no-persistence claims before demo/public exposure.
-

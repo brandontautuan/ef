@@ -36,10 +36,14 @@ function displayScore(nativeScore: number) {
 }
 
 function tierFor(score: number) {
-  if (score >= 86) return 'ICONIC';
-  if (score >= 70) return 'ELECTRIC';
-  if (score >= 52) return 'LOCKED IN';
-  return 'ON THE RISE';
+  if (score >= 99) return 'TRUE ADAM';
+  if (score >= 95) return 'ADAM';
+  if (score >= 88) return 'CHAD';
+  if (score >= 80) return 'CHADLITE';
+  if (score >= 70) return 'HTN';
+  if (score >= 60) return 'MTN';
+  if (score >= 50) return 'LTN';
+  return 'SUB5';
 }
 
 function isMediaSupported() {
@@ -87,7 +91,11 @@ function App() {
   const stateRef = useRef<ScanState>('idle');
   const trackerRef = useRef<FaceLandmarker | null>(null);
   const trackingFrame = useRef<number | null>(null);
-  const facesRef = useRef<Array<Array<{ x: number; y: number }>>>([]);
+  const facesRef = useRef<Array<Array<{ x: number; y: number; z: number }>>>([]);
+  const overlayRef = useRef<HTMLCanvasElement>(null);
+  const qualityCanvasRef = useRef<HTMLCanvasElement>(null);
+  const previousFaceCenterRef = useRef<{ x: number; y: number; at: number } | null>(null);
+  const validSinceRef = useRef<number | null>(null);
   const [state, setState] = useState<ScanState>('idle');
   const [message, setMessage] = useState('Camera stays off until you start.');
   const [progress, setProgress] = useState(0);
@@ -158,6 +166,41 @@ function App() {
     if (leftEye && rightEye && Math.abs(Math.atan2(rightEye.y - leftEye.y, rightEye.x - leftEye.x)) > .23) {
       return { eligible: false, failures: ['pose'] };
     }
+    // A conservative frontal-pose estimate. These thresholds are configuration
+    // candidates and must be tuned with consented device recordings before launch.
+    const nose = face[1]; const mouth = face[13];
+    if (leftEye && rightEye && nose && mouth) {
+      const eyeMidX = (leftEye.x + rightEye.x) / 2;
+      const eyeY = (leftEye.y + rightEye.y) / 2;
+      const eyeWidth = Math.max(.001, Math.abs(rightEye.x - leftEye.x));
+      const faceHeight = Math.max(.001, mouth.y - eyeY);
+      if (Math.abs(nose.x - eyeMidX) / eyeWidth > .24 || (nose.y - eyeY) / faceHeight < .35 || (nose.y - eyeY) / faceHeight > .8) return { eligible: false, failures: ['pose'] };
+    }
+    const now = performance.now();
+    const center = { x: (left + right) / 2, y: (top + bottom) / 2, at: now };
+    const previous = previousFaceCenterRef.current;
+    previousFaceCenterRef.current = center;
+    if (previous && now - previous.at < 350 && Math.hypot(center.x - previous.x, center.y - previous.y) > .035) return { eligible: false, failures: ['motion'] };
+    const qualityCanvas = qualityCanvasRef.current;
+    if (qualityCanvas) {
+      const context = qualityCanvas.getContext('2d', { willReadFrequently: true });
+      if (context) {
+        qualityCanvas.width = 64; qualityCanvas.height = 64;
+        const sx = Math.max(0, left * video.videoWidth); const sy = Math.max(0, top * video.videoHeight);
+        const sw = Math.min(video.videoWidth - sx, (right - left) * video.videoWidth); const sh = Math.min(video.videoHeight - sy, (bottom - top) * video.videoHeight);
+        context.drawImage(video, sx, sy, sw, sh, 0, 0, 64, 64);
+        const pixels = context.getImageData(0, 0, 64, 64).data;
+        let sum = 0; let sumSq = 0; let edge = 0; let count = 0;
+        const lum = (i: number) => .2126 * pixels[i] + .7152 * pixels[i + 1] + .0722 * pixels[i + 2];
+        for (let y = 1; y < 63; y += 1) for (let x = 1; x < 63; x += 1) {
+          const i = (y * 64 + x) * 4; const value = lum(i); sum += value; sumSq += value * value; count += 1;
+          edge += Math.abs(value - lum(i - 4)) + Math.abs(value - lum(i - 64 * 4));
+        }
+        const mean = sum / count; const deviation = Math.sqrt(Math.max(0, sumSq / count - mean * mean));
+        if (mean < 45 || mean > 235 || deviation < 16) return { eligible: false, failures: ['dark'] };
+        if (edge / count < 13) return { eligible: false, failures: ['blur'] };
+      }
+    }
     return { eligible: true, failures: [] };
   }, []);
 
@@ -197,6 +240,7 @@ function App() {
     if (stateRef.current !== 'sampling' && stateRef.current !== 'paused') return;
     const assessment = assessFrame();
     if (!assessment.eligible) {
+      validSinceRef.current = null;
       if (stateRef.current !== 'paused') {
         stateRef.current = 'paused';
         setState('paused');
@@ -209,6 +253,11 @@ function App() {
       stateRef.current = 'sampling';
       setState('sampling');
       setMessage('Hold that pose…');
+    }
+    if (validSinceRef.current === null) validSinceRef.current = performance.now();
+    if (performance.now() - validSinceRef.current < 700) {
+      setMessage('Hold that pose…');
+      return;
     }
     if (!captureFrame()) return;
     requestInFlight.current = true;
@@ -247,6 +296,8 @@ function App() {
       baseOptions: { modelAssetPath: 'https://storage.googleapis.com/mediapipe-models/face_landmarker/face_landmarker/float16/latest/face_landmarker.task' },
       runningMode: 'VIDEO',
       numFaces: 2,
+      outputFaceBlendshapes: true,
+      outputFacialTransformationMatrixes: true,
     });
     trackerRef.current = tracker;
     const detect = () => {
@@ -254,7 +305,21 @@ function App() {
       if (!video || !trackerRef.current || !streamRef.current) return;
       if (video.readyState >= HTMLMediaElement.HAVE_CURRENT_DATA) {
         const detection = trackerRef.current.detectForVideo(video, performance.now());
-        facesRef.current = detection.faceLandmarks.map((face) => face.map(({ x, y }) => ({ x, y })));
+        facesRef.current = detection.faceLandmarks.map((face) => face.map(({ x, y, z }) => ({ x, y, z })));
+        const overlay = overlayRef.current;
+        if (overlay) {
+          const rect = overlay.getBoundingClientRect(); const ratio = devicePixelRatio || 1;
+          overlay.width = rect.width * ratio; overlay.height = rect.height * ratio;
+          const context = overlay.getContext('2d');
+          if (context && video.videoWidth) {
+            context.setTransform(ratio, 0, 0, ratio, 0, 0); context.clearRect(0, 0, rect.width, rect.height);
+            const scale = Math.max(rect.width / video.videoWidth, rect.height / video.videoHeight);
+            const width = video.videoWidth * scale; const height = video.videoHeight * scale;
+            const offsetX = (rect.width - width) / 2; const offsetY = (rect.height - height) / 2;
+            context.fillStyle = '#d7ff36';
+            for (const point of facesRef.current[0] ?? []) context.fillRect(rect.width - (point.x * width + offsetX) - 1, point.y * height + offsetY - 1, 2, 2);
+          }
+        }
       }
       trackingFrame.current = requestAnimationFrame(detect);
     };
@@ -322,14 +387,14 @@ function App() {
     <section className={`scan-card ${state}`}>
       <div className="video-stage">
         {state === 'idle' && <div className="hero"><p className="eyebrow">LIVE CAMERA EXPERIENCE</p><h1>Find your<br /><em>frame.</em></h1><p>Three steady moments. One model estimate. No uploads until your scan starts.</p><button className="primary" onClick={() => void startCamera()}>Start scan <b>↗</b></button></div>}
-        {state !== 'idle' && state !== 'result' && <><video ref={videoRef} muted playsInline autoPlay /><div className="grid" /><div className="face-guide"><span /><span /><span /><span /></div></>}
+        {state !== 'idle' && state !== 'result' && <><video ref={videoRef} muted playsInline autoPlay /><canvas ref={overlayRef} className="landmark-overlay" /><div className="grid" /><div className="face-guide"><span /><span /><span /><span /></div></>}
         {state === 'result' && result && <div className="reveal"><p className="eyebrow">SCAN COMPLETE</p><div className="score">{result.score}</div><div className="tier">{result.tier}</div><p>Model estimate from this scan.<br />Not an objective measure of attractiveness.</p><div className="actions"><button className="primary" onClick={scanAgain}>Scan again <b>↗</b></button><button className="secondary" onClick={downloadCard}>Save card</button></div><label className="toggle"><input type="checkbox" checked={faceFree} onChange={(event) => setFaceFree(event.target.checked)} /> Face-free card</label></div>}
         {state === 'error' && <div className="error-panel"><p className="eyebrow">SCAN PAUSED</p><h2>Let’s try that again.</h2><p>{message}</p><button className="primary" onClick={() => void startCamera()}>Retry <b>↗</b></button><button className="text-button" onClick={exitScan}>Back home</button></div>}
       </div>
       {active && <div className="scan-controls"><div className="progress-line"><span style={{ width: `${progress}%` }} /></div><p>{message}</p><button className="exit" onClick={exitScan}>End scan</button></div>}
     </section>
     <footer><span>PRIVATE BY DEFAULT</span><span>SELECTED FRAMES ONLY</span><span>NO SAVED SCANS</span></footer>
-    <canvas ref={frameCanvasRef} className="hidden" />
+    <canvas ref={frameCanvasRef} className="hidden" /><canvas ref={qualityCanvasRef} className="hidden" />
   </main>;
 }
 

@@ -28,6 +28,7 @@ class Manifest:
     input: InputSpec
     license_review: str
     is_mock: bool
+    weights_file: str | None
 
     @property
     def dimensions(self) -> tuple[int, int]:
@@ -54,4 +55,5 @@ def load_manifest(model_dir: Path) -> Manifest:
         ),
         license_review=str(data.get("license_review", "pending")),
         is_mock=bool(data.get("is_mock", False)),
+        weights_file=str(data["weights_file"]) if data.get("weights_file") else None,
     )
