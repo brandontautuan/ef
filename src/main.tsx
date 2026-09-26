@@ -84,32 +84,43 @@ function geometricGate(faces: Landmark[][]): QualityAssessment {
   return { eligible: true, failures: [] };
 }
 
-// Crop a face-centered square (landmark box + 50% margin) into the 640x640 send
-// canvas, so camera and upload feed the model identically. Falls back to a
-// centered square when no face is supplied.
+// Crop an aligned, face-centered square into the 640x640 send canvas, so camera
+// and upload feed the model identically. The face is rotated so the eye line is
+// level and scaled to a consistent size (landmark box + 50% margin), which keeps
+// the input within the model's frontal training distribution and removes
+// tilt/scale variance between scans. Falls back to a centered square with no face.
+const FACE_MARGIN = 0.5;
 function cropFaceToCanvas(source: CanvasImageSource, sourceW: number, sourceH: number, face: Landmark[] | undefined, canvas: HTMLCanvasElement): boolean {
   if (sourceW === 0 || sourceH === 0) return false;
   canvas.width = 640;
   canvas.height = 640;
   const context = canvas.getContext('2d');
   if (!context) return false;
-  let sx: number; let sy: number; let sSide: number;
+  context.fillStyle = '#000';
+  context.fillRect(0, 0, 640, 640); // letterbox any area rotation brings outside the source
   if (face && face.length) {
     const xs = face.map((p) => p.x); const ys = face.map((p) => p.y);
     const left = Math.min(...xs) * sourceW; const right = Math.max(...xs) * sourceW;
     const top = Math.min(...ys) * sourceH; const bottom = Math.max(...ys) * sourceH;
     const cx = (left + right) / 2; const cy = (top + bottom) / 2;
-    const FACE_MARGIN = 0.5;
-    const boxSide = Math.max(right - left, bottom - top) * (1 + FACE_MARGIN);
-    sSide = Math.min(boxSide, sourceW, sourceH); // never exceed the frame
-    sx = Math.min(Math.max(cx - sSide / 2, 0), sourceW - sSide);
-    sy = Math.min(Math.max(cy - sSide / 2, 0), sourceH - sSide);
+    const boxSide = Math.min(Math.max(right - left, bottom - top) * (1 + FACE_MARGIN), sourceW, sourceH);
+    // Roll angle from the eye landmarks (in source pixels, so aspect is honored).
+    const leftEye = face[33]; const rightEye = face[263];
+    const angle = leftEye && rightEye
+      ? Math.atan2((rightEye.y - leftEye.y) * sourceH, (rightEye.x - leftEye.x) * sourceW)
+      : 0;
+    const scale = 640 / boxSide;
+    context.save();
+    context.translate(320, 320);   // face center -> canvas center
+    context.rotate(-angle);        // level the eyes
+    context.scale(scale, scale);   // normalize face size
+    context.translate(-cx, -cy);
+    context.drawImage(source, 0, 0);
+    context.restore();
   } else {
-    sSide = Math.min(sourceW, sourceH);
-    sx = (sourceW - sSide) / 2;
-    sy = (sourceH - sSide) / 2;
+    const sSide = Math.min(sourceW, sourceH);
+    context.drawImage(source, (sourceW - sSide) / 2, (sourceH - sSide) / 2, sSide, sSide, 0, 0, 640, 640);
   }
-  context.drawImage(source, sx, sy, sSide, sSide, 0, 0, 640, 640);
   return true;
 }
 

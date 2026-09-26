@@ -67,8 +67,12 @@ class ScutResearchModel:
     def score(self, buffer: list[float]) -> float:
         tensor = self._torch.tensor(buffer, dtype=self._torch.float32)
         tensor = tensor.reshape(self._height, self._width, 3).permute(2, 0, 1).unsqueeze(0)
+        # Test-time augmentation: average the score over the crop and its
+        # horizontal mirror. Faces are roughly symmetric, so this reduces
+        # left/right framing jitter and smooths frame-to-frame variance.
+        batch = self._torch.cat([tensor, self._torch.flip(tensor, dims=[3])], dim=0)
         with self._torch.no_grad():
-            return float(self._model(tensor).squeeze().item())
+            return float(self._model(batch).mean().item())
 
 
 def build_runner(manifest: Manifest, model_dir: Path) -> ModelRunner:
