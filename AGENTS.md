@@ -206,6 +206,10 @@ and a research runner that some of its baseline text describes as absent.
 - Cards use the same dark styling and roast headline, support the face-free option,
   and include the denominator. Result UI retains the entertainment disclaimer and
   optional general style suggestions; these do not explain model predictions.
+- Card photos fit the entire captured frame proportionally inside the 936 × 600
+  photo area, centered with dark space at the sides for a square capture. Use a
+  single scale factor from the source canvas dimensions; do not stretch to fill
+  the area or restore the previous hard-coded crop that removed forehead/chin.
 - Result/error/idle states now stop camera tracks and tracking. Startup timeouts
   are tracked, and cancelled sessions discard late permission/tracker completions.
   Continue testing lifecycle behavior when changing scan orchestration.
