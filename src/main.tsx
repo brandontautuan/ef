@@ -43,18 +43,29 @@ function median(values: number[]) {
   return sorted[Math.floor(sorted.length / 2)];
 }
 
+// Heuristic display calibration. Real-face native scores from this model cluster
+// in a narrow band (~1.8-3.8, mean ~2.7) rather than spanning the full 1-5, so a
+// flat (native-1)/4 map compressed everyone into SUB5. We stretch that observed
+// band across 0-100 instead. The tier thresholds below are the display cut points
+// that reproduce the calibration.json targetShares under an assumed N(2.7, 0.35)
+// distribution. This is an unvalidated stand-in — replace with a data-driven
+// percentile calibration (measured over a consented set) before any real launch.
+const DISPLAY_NATIVE_MIN = 1.8;
+const DISPLAY_NATIVE_MAX = 3.8;
+
 function displayScore(nativeScore: number) {
-  return Math.round(Math.min(100, Math.max(0, ((nativeScore - 1) / 4) * 100)));
+  const span = DISPLAY_NATIVE_MAX - DISPLAY_NATIVE_MIN;
+  return Math.round(Math.min(100, Math.max(0, ((nativeScore - DISPLAY_NATIVE_MIN) / span) * 100)));
 }
 
 function tierFor(score: number) {
-  if (score >= 99) return 'TRUE ADAM';
-  if (score >= 95) return 'ADAM';
-  if (score >= 88) return 'CHAD';
-  if (score >= 80) return 'CHADLITE';
-  if (score >= 70) return 'HTN';
-  if (score >= 60) return 'MTN';
-  if (score >= 50) return 'LTN';
+  if (score >= 97) return 'TRUE ADAM';
+  if (score >= 90) return 'ADAM';
+  if (score >= 81) return 'CHAD';
+  if (score >= 74) return 'CHADLITE';
+  if (score >= 60) return 'HTN';
+  if (score >= 43) return 'MTN';
+  if (score >= 27) return 'LTN';
   return 'SUB5';
 }
 
@@ -294,7 +305,7 @@ function App() {
       nativeScores: nativeScores.map((value) => Number(value.toFixed(3))),
       aggregation: 'median',
       medianNativeScore: Number(medianNativeScore.toFixed(3)),
-      displayFormula: 'clamp(round(((native - 1) / 4) * 100), 0, 100)',
+      displayFormula: 'clamp(round(((native - 1.8) / 2) * 100), 0, 100)',
       displayScore: score,
       tier: tierFor(score),
       modelVersion,
@@ -498,7 +509,7 @@ function App() {
             </div>}
            </div>}
          </>}
-        {state === 'result' && result && <div className="reveal"><p className="eyebrow">SCAN COMPLETE</p><div className="score">{result.score}</div><div className="tier">{result.tier}</div><p>Model estimate from this scan.<br />Not an objective measure of attractiveness.</p><section className="joke-card"><p className="eyebrow">JOKE MODE · CAMERA NOTES</p>{result.jokes.map((joke) => <p key={joke}>{joke}</p>)}<small>Fictional camera commentary—not health or appearance advice.</small></section>{scanDebugEnabled && <details className="diagnostics" open><summary>How this result was calculated</summary><div><span>Valid frames</span><b>{result.nativeScores.map((value) => value.toFixed(3)).join(' · ')}</b></div><div><span>Aggregation</span><b>Median: {result.medianNativeScore.toFixed(3)} / 5</b></div><div><span>Display map</span><b>((native − 1) ÷ 4) × 100</b></div><div><span>Model</span><b>{result.modelVersion}</b></div></details>}<div className="actions"><button className="primary" onClick={scanAgain}>Scan again <b>↗</b></button><button className="secondary" onClick={downloadCard}>Save card</button></div><label className="toggle"><input type="checkbox" checked={faceFree} onChange={(event) => setFaceFree(event.target.checked)} /> Face-free card</label></div>}
+        {state === 'result' && result && <div className="reveal"><p className="eyebrow">SCAN COMPLETE</p><div className="score">{result.score}</div><div className="tier">{result.tier}</div><p>Model estimate from this scan.<br />Not an objective measure of attractiveness.</p><section className="joke-card"><p className="eyebrow">JOKE MODE · CAMERA NOTES</p>{result.jokes.map((joke) => <p key={joke}>{joke}</p>)}<small>Fictional camera commentary—not health or appearance advice.</small></section>{scanDebugEnabled && <details className="diagnostics" open><summary>How this result was calculated</summary><div><span>Valid frames</span><b>{result.nativeScores.map((value) => value.toFixed(3)).join(' · ')}</b></div><div><span>Aggregation</span><b>Median: {result.medianNativeScore.toFixed(3)} / 5</b></div><div><span>Display map</span><b>((native − 1.8) ÷ 2) × 100</b></div><div><span>Model</span><b>{result.modelVersion}</b></div></details>}<div className="actions"><button className="primary" onClick={scanAgain}>Scan again <b>↗</b></button><button className="secondary" onClick={downloadCard}>Save card</button></div><label className="toggle"><input type="checkbox" checked={faceFree} onChange={(event) => setFaceFree(event.target.checked)} /> Face-free card</label></div>}
         {state === 'error' && <div className="error-panel"><p className="eyebrow">SCAN PAUSED</p><h2>Let’s try that again.</h2><p>{message}</p><button className="primary" onClick={() => void startCamera()}>Retry <b>↗</b></button><button className="text-button" onClick={exitScan}>Back home</button></div>}
       </div>
       {active && <div className="scan-controls"><div className="progress-line"><span style={{ width: `${progress}%` }} /></div><p>{message}</p><button className="exit" onClick={exitScan}>End scan</button></div>}
