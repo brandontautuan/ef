@@ -2,6 +2,10 @@
 
 The browser client for the Mog Scan MVP. It requests the front camera only after the user starts a scan, runs MediaPipe Face Landmarker locally for the one-face/framing gate, sends only selected crops to the score service, aggregates three predictions locally, and renders share cards locally.
 
+## Local "Who Mogs Who?" edit
+
+The **Who Mogs Who?** button plays a 15-second vertical edit entirely in the browser. It only offers leaderboard entries that saved a scan photo to this browser. The winner is derived from each entry’s already-saved score—no comparison endpoint or second scoring model is used. The bundled track starts after **Generate edit** or **Replay edit**; no video or generated edit is persisted or uploaded.
+
 ## Run it
 
 ```sh

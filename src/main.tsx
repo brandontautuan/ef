@@ -2,7 +2,11 @@ import React, { useCallback, useEffect, useRef, useState } from 'react';
 import { createRoot } from 'react-dom/client';
 import { FaceLandmarker, FilesetResolver } from '@mediapipe/tasks-vision';
 import { BlackCapsule } from './components/BlackCapsule';
+import { MogEdit } from './components/MogEdit';
 import { resultCopy } from './resultCopy';
+import { clearLeaderboard, loadLeaderboard, normalizeName, rank, saveLeaderboard, type LeaderboardEntry } from './leaderboard';
+import { clearLeaderboardPhotos, deleteLeaderboardPhoto, loadLeaderboardPhoto, saveLeaderboardPhoto } from './leaderboardPhotos';
+import type { EditFace } from './mogTimeline';
 import './styles.css';
 
 type ScanState = 'idle' | 'permission' | 'acquiring' | 'sampling' | 'paused' | 'analyzing' | 'result' | 'error';
@@ -194,6 +198,7 @@ function App() {
   const overlayRef = useRef<HTMLCanvasElement>(null);
   const qualityCanvasRef = useRef<HTMLCanvasElement>(null);
   const uploadInputRef = useRef<HTMLInputElement>(null);
+  const editUrlsRef = useRef<string[]>([]);
   const previousFaceCenterRef = useRef<{ x: number; y: number; at: number } | null>(null);
   const validSinceRef = useRef<number | null>(null);
   const [state, setState] = useState<ScanState>('idle');
@@ -204,6 +209,8 @@ function App() {
   const [introPlaying, setIntroPlaying] = useState(false);
   const [introSequence, setIntroSequence] = useState(0);
   const [hud, setHud] = useState<{ faces: number; box: { l: number; t: number; w: number; h: number } | null; eligible: boolean; note: string }>({ faces: 0, box: null, eligible: false, note: 'INITIALIZING' });
+  const [leaderboardOpen, setLeaderboardOpen] = useState(false); const [saveOpen, setSaveOpen] = useState(false); const [displayName, setDisplayName] = useState(''); const [entries, setEntries] = useState<LeaderboardEntry[]>(() => loadLeaderboard()); const [leaderboardError, setLeaderboardError] = useState('');
+  const [editOpen, setEditOpen] = useState(false); const [editLoading, setEditLoading] = useState(false); const [editFaces, setEditFaces] = useState<EditFace[]>([]);
 
   useEffect(() => { stateRef.current = state; }, [state]);
 
@@ -243,6 +250,7 @@ function App() {
   }, [clearScanTimers]);
 
   useEffect(() => () => { activeScanId.current = makeScanId(); clearScanTimers(); stopTracking(); stopCamera(); }, [clearScanTimers, stopCamera, stopTracking]);
+  useEffect(() => () => { editUrlsRef.current.forEach((url) => URL.revokeObjectURL(url)); }, []);
 
   useEffect(() => {
     if (state === 'result' || state === 'error' || state === 'idle') {
@@ -616,6 +624,32 @@ function App() {
     const link = document.createElement('a'); link.download = 'mog-scan-result.png'; link.href = canvas.toDataURL('image/png'); link.click();
   }, [faceFree, result]);
 
+  const saveToLeaderboard = useCallback(async () => { if (!result) return; const name = normalizeName(displayName); if (name.length < 2 || name.length > 20) { setLeaderboardError('Use 2–20 characters.'); return; } const prior = entries.find((entry) => entry.displayName.toLowerCase() === name.toLowerCase()); if (prior && result.score <= prior.score) { setLeaderboardError('This name already has an equal or higher score.'); return; } if (prior && !window.confirm(`Replace ${prior.score} with ${result.score}?`)) return; const now = new Date().toISOString(); const entry = { id: prior?.id ?? makeScanId(), displayName: name, score: result.score, tier: result.tier, modelVersion: result.modelVersion, createdAt: prior?.createdAt ?? now, updatedAt: now }; try { const photo = await new Promise<Blob | null>((resolve) => frameCanvasRef.current?.toBlob(resolve, 'image/jpeg', .9)); if (!photo) throw new Error(); await saveLeaderboardPhoto(entry.id, photo); const next = rank([...entries.filter((item) => item !== prior), entry]); saveLeaderboard(next); setEntries(next); setSaveOpen(false); setDisplayName(''); } catch { setLeaderboardError('Local save failed.'); } }, [displayName, entries, result]);
+
+  const openMogEdit = useCallback(async () => {
+    editUrlsRef.current.forEach((url) => URL.revokeObjectURL(url));
+    editUrlsRef.current = [];
+    setEditFaces([]); setEditLoading(true); setEditOpen(true);
+    const storedFaces = await Promise.all(loadLeaderboard().map(async (entry) => {
+      try {
+        const photo = await loadLeaderboardPhoto(entry.id);
+        if (!photo) return null;
+        const imageUrl = URL.createObjectURL(photo);
+        editUrlsRef.current.push(imageUrl);
+        const lowResolution = await new Promise<boolean | null>((resolve) => {
+          const image = new Image();
+          image.onload = () => resolve(Math.min(image.naturalWidth, image.naturalHeight) < 360);
+          image.onerror = () => resolve(null);
+          image.src = imageUrl;
+        });
+        if (lowResolution === null) { URL.revokeObjectURL(imageUrl); editUrlsRef.current = editUrlsRef.current.filter((url) => url !== imageUrl); return null; }
+        return { ...entry, imageUrl, lowResolution };
+      } catch { return null; }
+    }));
+    setEditFaces(storedFaces.filter((entry): entry is EditFace => entry !== null));
+    setEditLoading(false);
+  }, []);
+
   const active = ['permission', 'acquiring', 'sampling', 'paused'].includes(state);
   const tracking = state === 'acquiring' || state === 'sampling' || state === 'paused';
   const framesDone = Math.round((progress / 100) * REQUIRED_PREDICTIONS);
@@ -623,6 +657,8 @@ function App() {
   return <main className="app-shell">
     <header>
       <a className="brand" href="#top" onClick={exitScan}><i className="brand-capsule" />MOG<span>/</span>SCAN</a>
+      <button className="leaderboard-link" onClick={() => { setEntries(loadLeaderboard()); setLeaderboardOpen(true); }}>Leaderboard</button>
+      <button className="leaderboard-link" onClick={() => void openMogEdit()}>Who Mogs Who?</button>
       <span className="edition">THE BLACK CAPSULE <span>VOL. 001</span></span>
       <span className="status"><i className={tracking ? 'live' : ''} />{state === 'permission' ? 'AWAITING CAMERA' : tracking ? 'CAMERA ACTIVE' : 'CAMERA OFF'}</span>
     </header>
@@ -674,12 +710,11 @@ function App() {
           <div className="tier"><span className="tier-mark" />{result.tier}</div>
           <h2 className="verdict">{verdict.headline}</h2>
           <p className="verdict-detail">{verdict.detail}</p>
-          <div className="actions"><button className="primary" onClick={scanAgain}>Run it back <span aria-hidden="true">↗</span></button><button className="secondary" onClick={downloadCard}>Save the receipt <span aria-hidden="true">↓</span></button></div>
+          <div className="actions"><button className="primary" onClick={scanAgain}>Run it back <span aria-hidden="true">↗</span></button><button className="secondary" onClick={() => setSaveOpen(true)}>Save leaderboard</button><button className="secondary" onClick={downloadCard}>Save the receipt <span aria-hidden="true">↓</span></button></div>
           <label className="toggle"><input type="checkbox" checked={faceFree} onChange={(event) => setFaceFree(event.target.checked)} /> Keep my face off the card</label>
           <section className="level-up">
-            {tierPlaybooks.slice(Math.max(0, tierPlaybooks.findIndex((playbook) => playbook.tier === result.tier) + 1), Math.max(0, tierPlaybooks.findIndex((playbook) => playbook.tier === result.tier) + 2)).map((playbook) => <details key={playbook.tier}><summary>Your next move <span>+</span></summary><p>General style ideas, not an explanation of your score.</p><ol>{playbook.steps.map((step) => <li key={step}>{step}</li>)}</ol></details>)}
+            {tierPlaybooks.slice(Math.max(0, tierPlaybooks.findIndex((playbook) => playbook.tier === result.tier) + 1), Math.max(0, tierPlaybooks.findIndex((playbook) => playbook.tier === result.tier) + 2)).map((playbook) => <details key={playbook.tier}><summary>ASCENDING TO {playbook.tier} <span>+</span></summary><p>General style ideas, not an explanation of your score.</p><ol>{playbook.steps.map((step) => <li key={step}>{step}</li>)}</ol></details>)}
           </section>
-          {scanDebugEnabled && <details className="diagnostics"><summary>How this result was calculated</summary><div><span>Valid frames</span><b>{result.nativeScores.map((value) => value.toFixed(3)).join(' · ')}</b></div><div><span>Aggregation</span><b>Median: {result.medianNativeScore.toFixed(3)} / 5</b></div><div><span>Display map</span><b>((native − 2.3) ÷ 1.6) × 100</b></div><div><span>Model</span><b>{result.modelVersion}</b></div></details>}
           <p className="result-disclaimer">A model estimate. A roast. Not a measure of your worth.</p>
         </div>}
         {state === 'analyzing' && <div className="analyzing-panel">
@@ -696,6 +731,9 @@ function App() {
       {active && <div className="scan-controls"><div className="progress-line" role="progressbar" aria-label="Scan progress" aria-valuenow={progress} aria-valuemin={0} aria-valuemax={100}><span style={{ width: `${progress}%` }} /></div><p role="status">{message}</p><button className="exit" onClick={exitScan}>End scan</button></div>}
     </section>
     <footer><span>THICK SKIN. GOOD LIGHTING.</span><span>FOR ENTERTAINMENT. NOT OBJECTIVE TRUTH.</span><span>MOG / SCAN © {new Date().getFullYear()}</span></footer>
+    {saveOpen && <div className="modal"><div className="modal-card"><h2>Save locally</h2><p>Your name, score, tier, date, and this scan photo save in this browser. The photo is only used for local Who Mogs Who? playback.</p><input value={displayName} onChange={(e) => setDisplayName(e.target.value)} placeholder="Display name" maxLength={20} />{leaderboardError && <p>{leaderboardError}</p>}<div className="actions"><button className="primary" onClick={() => void saveToLeaderboard()}>Save</button><button className="secondary" onClick={() => setSaveOpen(false)}>Cancel</button></div></div></div>}
+    {leaderboardOpen && <div className="modal"><div className="modal-card leaderboard"><h2>Local leaderboard</h2>{entries.length ? <ol>{entries.map((entry, i) => <li key={entry.id}><span>#{i + 1} {entry.displayName}</span><b>{entry.score} · {entry.tier}</b><button className="text-button" onClick={() => { const next = entries.filter((item) => item.id !== entry.id); saveLeaderboard(next); setEntries(next); void deleteLeaderboardPhoto(entry.id); }}>Delete</button></li>)}</ol> : <p>No saved scores.</p>}<div className="actions leaderboard-actions"><button className="secondary" onClick={() => { setLeaderboardOpen(false); void openMogEdit(); }}>Who Mogs Who?</button><button className="secondary" onClick={() => { if (window.confirm('Clear local records and photos?')) { clearLeaderboard(); void clearLeaderboardPhotos(); setEntries([]); } }}>Clear all</button><button className="primary" onClick={() => setLeaderboardOpen(false)}>Done</button></div></div></div>}
+    {editOpen && <MogEdit faces={editFaces} loading={editLoading} onClose={() => setEditOpen(false)} />}
     <canvas ref={frameCanvasRef} className="hidden" /><canvas ref={qualityCanvasRef} className="hidden" />
     <input ref={uploadInputRef} type="file" accept="image/*" className="hidden" onChange={(event) => { const file = event.target.files?.[0]; event.target.value = ''; if (file) void scanImage(file); }} />
   </main>;
