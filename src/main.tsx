@@ -131,13 +131,13 @@ function median(values: number[]) {
 
 // Heuristic display calibration. With the face-crop fix, real-face native scores
 // from this model land around ~3.0-3.2 (measured on a live face at normal/close
-// distance), so we center the display band on 3.1 -> 50 with a span of 1.6, i.e.
-// map native [2.3, 3.9] across 0-100. That puts a typical face mid-scale (MTN)
-// with headroom above/below for genuine variation. Still an unvalidated stand-in
+// distance). The band is shifted slightly stricter: native [2.4, 4.0] across
+// 0-100 (span 1.6), so a typical face sits at the lower half of mid-scale and the
+// higher tiers take a genuinely higher native score. Still an unvalidated stand-in
 // tuned to one tester — replace with a data-driven percentile calibration
 // (measured over a consented set) before any real launch.
-const DISPLAY_NATIVE_MIN = 2.3;
-const DISPLAY_NATIVE_MAX = 3.9;
+const DISPLAY_NATIVE_MIN = 2.4;
+const DISPLAY_NATIVE_MAX = 4.0;
 
 function displayScore(nativeScore: number) {
   const span = DISPLAY_NATIVE_MAX - DISPLAY_NATIVE_MIN;
@@ -390,7 +390,7 @@ function App() {
       nativeScores: nativeScores.map((value) => Number(value.toFixed(3))),
       aggregation: 'median',
       medianNativeScore: Number(medianNativeScore.toFixed(3)),
-      displayFormula: 'clamp(round(((native - 2.3) / 1.6) * 100), 0, 100)',
+      displayFormula: 'clamp(round(((native - 2.4) / 1.6) * 100), 0, 100)',
       displayScore: score,
       tier: tierFor(score),
       modelVersion,
