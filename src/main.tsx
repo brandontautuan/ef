@@ -5,7 +5,8 @@ import { BlackCapsule } from './components/BlackCapsule';
 import { resultCopy } from './resultCopy';
 import './styles.css';
 
-type ScanState = 'idle' | 'permission' | 'acquiring' | 'sampling' | 'paused' | 'result' | 'error';
+type ScanState = 'idle' | 'permission' | 'acquiring' | 'sampling' | 'paused' | 'analyzing' | 'result' | 'error';
+type Landmark = { x: number; y: number; z: number };
 type QualityFailure = 'no_face' | 'multiple_faces' | 'too_small' | 'cut_off' | 'pose' | 'dark' | 'blur' | 'motion';
 type QualityAssessment = { eligible: boolean; failures: QualityFailure[] };
 type Prediction = { nativeScore: number; modelVersion: string; sequence: number };
@@ -35,8 +36,77 @@ const tierPlaybooks = [
   { tier: 'TRUE ADAM', title: 'Final form', steps: ['There is no higher unlock. Keep your own standards, not the model’s.', 'Stay grounded: a camera score is not a measurement of worth.', 'Use the share card only if you genuinely want to.'] },
 ] as const;
 
+// Messages for the photo-upload path (the live prompts are camera-phrased).
+const uploadPrompts: Partial<Record<QualityFailure, string>> = {
+  no_face: 'No face found in that photo. Try a clear, front-facing shot.',
+  multiple_faces: 'That photo has more than one face. Use a solo photo.',
+  too_small: 'The face is too small in that photo. Use a closer shot.',
+  cut_off: 'The face is cut off. Use a photo with the whole face in frame.',
+  pose: 'Use a front-facing photo — look toward the camera.',
+};
+
 function makeScanId() {
   return crypto.randomUUID?.() ?? `${Date.now()}-${Math.random().toString(16).slice(2)}`;
+}
+
+function loadImage(src: string): Promise<HTMLImageElement> {
+  return new Promise((resolve, reject) => {
+    const image = new Image();
+    image.onload = () => resolve(image);
+    image.onerror = () => reject(new Error('That image could not be loaded.'));
+    image.src = src;
+  });
+}
+
+// Geometric subset of the quality gate: one face, size, framing, and pose.
+// Shared by the still-image upload path (motion/brightness checks are live-only).
+function geometricGate(faces: Landmark[][]): QualityAssessment {
+  if (faces.length === 0) return { eligible: false, failures: ['no_face'] };
+  if (faces.length > 1) return { eligible: false, failures: ['multiple_faces'] };
+  const face = faces[0];
+  const xs = face.map((p) => p.x); const ys = face.map((p) => p.y);
+  const left = Math.min(...xs); const right = Math.max(...xs); const top = Math.min(...ys); const bottom = Math.max(...ys);
+  if (right - left < .22 || bottom - top < .22) return { eligible: false, failures: ['too_small'] };
+  if (left < .03 || right > .97 || top < .03 || bottom > .97) return { eligible: false, failures: ['cut_off'] };
+  const leftEye = face[33]; const rightEye = face[263];
+  if (leftEye && rightEye && Math.abs(Math.atan2(rightEye.y - leftEye.y, rightEye.x - leftEye.x)) > .23) return { eligible: false, failures: ['pose'] };
+  const nose = face[1]; const mouth = face[13];
+  if (leftEye && rightEye && nose && mouth) {
+    const eyeMidX = (leftEye.x + rightEye.x) / 2; const eyeY = (leftEye.y + rightEye.y) / 2;
+    const eyeWidth = Math.max(.001, Math.abs(rightEye.x - leftEye.x));
+    const faceHeight = Math.max(.001, mouth.y - eyeY);
+    if (Math.abs(nose.x - eyeMidX) / eyeWidth > .24 || (nose.y - eyeY) / faceHeight < .35 || (nose.y - eyeY) / faceHeight > .8) return { eligible: false, failures: ['pose'] };
+  }
+  return { eligible: true, failures: [] };
+}
+
+// Crop a face-centered square (landmark box + 50% margin) into the 640x640 send
+// canvas, so camera and upload feed the model identically. Falls back to a
+// centered square when no face is supplied.
+function cropFaceToCanvas(source: CanvasImageSource, sourceW: number, sourceH: number, face: Landmark[] | undefined, canvas: HTMLCanvasElement): boolean {
+  if (sourceW === 0 || sourceH === 0) return false;
+  canvas.width = 640;
+  canvas.height = 640;
+  const context = canvas.getContext('2d');
+  if (!context) return false;
+  let sx: number; let sy: number; let sSide: number;
+  if (face && face.length) {
+    const xs = face.map((p) => p.x); const ys = face.map((p) => p.y);
+    const left = Math.min(...xs) * sourceW; const right = Math.max(...xs) * sourceW;
+    const top = Math.min(...ys) * sourceH; const bottom = Math.max(...ys) * sourceH;
+    const cx = (left + right) / 2; const cy = (top + bottom) / 2;
+    const FACE_MARGIN = 0.5;
+    const boxSide = Math.max(right - left, bottom - top) * (1 + FACE_MARGIN);
+    sSide = Math.min(boxSide, sourceW, sourceH); // never exceed the frame
+    sx = Math.min(Math.max(cx - sSide / 2, 0), sourceW - sSide);
+    sy = Math.min(Math.max(cy - sSide / 2, 0), sourceH - sSide);
+  } else {
+    sSide = Math.min(sourceW, sourceH);
+    sx = (sourceW - sSide) / 2;
+    sy = (sourceH - sSide) / 2;
+  }
+  context.drawImage(source, sx, sy, sSide, sSide, 0, 0, 640, 640);
+  return true;
 }
 
 function median(values: number[]) {
@@ -123,6 +193,7 @@ function App() {
   const facesRef = useRef<Array<Array<{ x: number; y: number; z: number }>>>([]);
   const overlayRef = useRef<HTMLCanvasElement>(null);
   const qualityCanvasRef = useRef<HTMLCanvasElement>(null);
+  const uploadInputRef = useRef<HTMLInputElement>(null);
   const previousFaceCenterRef = useRef<{ x: number; y: number; at: number } | null>(null);
   const validSinceRef = useRef<number | null>(null);
   const [state, setState] = useState<ScanState>('idle');
@@ -278,36 +349,10 @@ function App() {
     const video = videoRef.current;
     const canvas = frameCanvasRef.current;
     if (!video || !canvas) return false;
-    const vw = video.videoWidth; const vh = video.videoHeight;
-    if (vw === 0 || vh === 0) return false;
-    canvas.width = 640;
-    canvas.height = 640;
-    const context = canvas.getContext('2d');
-    if (!context) return false;
     // Crop to the detected face (not a fixed center square), so the model sees a
     // consistently framed face regardless of distance. A whole-frame crop made the
     // score track how much of the frame the face filled — far away read as 0.
-    const face = facesRef.current[0];
-    let sx: number; let sy: number; let sSide: number;
-    if (face && face.length) {
-      const xs = face.map((p) => p.x); const ys = face.map((p) => p.y);
-      const left = Math.min(...xs) * vw; const right = Math.max(...xs) * vw;
-      const top = Math.min(...ys) * vh; const bottom = Math.max(...ys) * vh;
-      const cx = (left + right) / 2; const cy = (top + bottom) / 2;
-      // Expand the tight landmark box to include forehead/jaw/margin, then square it.
-      const FACE_MARGIN = 0.5;
-      const boxSide = Math.max(right - left, bottom - top) * (1 + FACE_MARGIN);
-      sSide = Math.min(boxSide, vw, vh); // never exceed the frame
-      sx = Math.min(Math.max(cx - sSide / 2, 0), vw - sSide);
-      sy = Math.min(Math.max(cy - sSide / 2, 0), vh - sSide);
-    } else {
-      // Fallback (no face): centered square, as before.
-      sSide = Math.min(vw, vh);
-      sx = (vw - sSide) / 2;
-      sy = (vh - sSide) / 2;
-    }
-    context.drawImage(video, sx, sy, sSide, sSide, 0, 0, 640, 640);
-    return true;
+    return cropFaceToCanvas(video, video.videoWidth, video.videoHeight, facesRef.current[0], canvas);
   }, []);
 
   const finish = useCallback((items: Prediction[]) => {
@@ -481,6 +526,59 @@ function App() {
     }
   }, [beginSampling, clearScanTimers, initializeTracker, resetScan, stopCamera, stopTracking]);
 
+  // Photo-upload path: detect a face in a still image, run the geometric quality
+  // gate, crop to the face, and score that single crop. Only the crop is sent
+  // (never the raw upload), and the object URL + detector are released after.
+  const scanImage = useCallback(async (file: File) => {
+    stopTracking(); stopCamera(); resetScan();
+    const scanId = activeScanId.current;
+    stateRef.current = 'analyzing'; setState('analyzing');
+    setMessage('Reading your photo…');
+    let objectUrl: string | null = null;
+    let landmarker: FaceLandmarker | null = null;
+    try {
+      if (!file.type.startsWith('image/')) throw new Error('Please choose an image file.');
+      objectUrl = URL.createObjectURL(file);
+      const image = await loadImage(objectUrl);
+      if (scanId !== activeScanId.current) return;
+      const vision = await FilesetResolver.forVisionTasks('https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@latest/wasm');
+      landmarker = await FaceLandmarker.createFromOptions(vision, {
+        baseOptions: { modelAssetPath: 'https://storage.googleapis.com/mediapipe-models/face_landmarker/face_landmarker/float16/latest/face_landmarker.task' },
+        runningMode: 'IMAGE',
+        numFaces: 2,
+      });
+      if (scanId !== activeScanId.current) return;
+      const detection = landmarker.detect(image);
+      const faces = detection.faceLandmarks.map((face) => face.map(({ x, y, z }) => ({ x, y, z })));
+      const gate = geometricGate(faces);
+      if (!gate.eligible) {
+        scanDebug('upload_rejected', { reason: gate.failures[0], scanId });
+        setState('error');
+        setMessage(uploadPrompts[gate.failures[0]] ?? 'That photo could not be scanned. Try another.');
+        return;
+      }
+      if (!cropFaceToCanvas(image, image.naturalWidth, image.naturalHeight, faces[0], frameCanvasRef.current!)) {
+        throw new Error('Could not prepare the photo.');
+      }
+      setMessage('Scoring your photo…');
+      requestInFlight.current = true;
+      const prediction = await scoreFrame(frameCanvasRef.current!, scanId, ++sequence.current);
+      if (scanId !== activeScanId.current) return;
+      scanDebug('upload_scored', { scanId, nativeScore: Number(prediction.nativeScore.toFixed(3)), modelVersion: prediction.modelVersion });
+      finish([prediction]);
+    } catch (error) {
+      scanDebug('upload_error', { scanId, message: error instanceof Error ? error.message : 'Unknown error' });
+      if (scanId === activeScanId.current) {
+        setState('error');
+        setMessage(error instanceof Error ? error.message : 'That photo could not be scanned. Try another.');
+      }
+    } finally {
+      if (scanId === activeScanId.current) requestInFlight.current = false;
+      if (objectUrl) URL.revokeObjectURL(objectUrl);
+      landmarker?.close();
+    }
+  }, [finish, resetScan, stopCamera, stopTracking]);
+
   const scanAgain = useCallback(() => { stopTracking(); stopCamera(); void startCamera(); }, [startCamera, stopCamera, stopTracking]);
   const exitScan = useCallback(() => {
     setIntroPlaying(false);
@@ -527,13 +625,16 @@ function App() {
             <p className="eyebrow"><span className="tiny-cross">✳</span> A SMALL DOSE OF EGO CHECK</p>
             <h1>Take the<br /><em>black pill.</em></h1>
             <p className="hero-description">Three frames. One score. Zero glazing.<br />Your camera roll is about to get humbled.</p>
-            <button className="primary start-button" onClick={() => void startCamera()}>Start scan <span aria-hidden="true">↗</span></button>
-            <p className="consent-note">Camera starts on your say-so. Selected frames only.</p>
+            <div className="hero-actions">
+              <button className="primary start-button" onClick={() => void startCamera()}>Start scan <span aria-hidden="true">↗</span></button>
+              <button className="secondary upload-button" onClick={() => uploadInputRef.current?.click()}>Upload a photo <span aria-hidden="true">↑</span></button>
+            </div>
+            <p className="consent-note">Camera starts on your say-so. Selected frames only. Uploads send just the cropped face.</p>
           </div>
           <BlackCapsule />
           <div className="hero-bottom"><span><b>01</b> FACE THE CAMERA</span><span><b>02</b> HOLD YOUR POSE</span><span><b>03</b> TAKE THE ROAST</span></div>
         </div>}
-        {state !== 'idle' && state !== 'result' && <>
+        {state !== 'idle' && state !== 'result' && state !== 'analyzing' && <>
           <video ref={videoRef} muted playsInline autoPlay />
           <canvas ref={overlayRef} className="landmark-overlay" />
           <div className="grid" />
@@ -572,7 +673,13 @@ function App() {
           {scanDebugEnabled && <details className="diagnostics"><summary>How this result was calculated</summary><div><span>Valid frames</span><b>{result.nativeScores.map((value) => value.toFixed(3)).join(' · ')}</b></div><div><span>Aggregation</span><b>Median: {result.medianNativeScore.toFixed(3)} / 5</b></div><div><span>Display map</span><b>((native − 2.3) ÷ 1.6) × 100</b></div><div><span>Model</span><b>{result.modelVersion}</b></div></details>}
           <p className="result-disclaimer">A model estimate. A roast. Not a measure of your worth.</p>
         </div>}
-        {state === 'error' && <div className="error-panel"><p className="eyebrow">TECHNICAL FOUL</p><h2>The scan flinched.</h2><p>{message}</p><button className="primary" onClick={() => void startCamera()}>Retry <span aria-hidden="true">↗</span></button><button className="text-button" onClick={exitScan}>Back home</button></div>}
+        {state === 'analyzing' && <div className="analyzing-panel">
+          <p className="eyebrow">READING THE ROOM</p>
+          <BlackCapsule />
+          <p role="status">{message}</p>
+          <button className="text-button" onClick={exitScan}>Cancel</button>
+        </div>}
+        {state === 'error' && <div className="error-panel"><p className="eyebrow">TECHNICAL FOUL</p><h2>The scan flinched.</h2><p>{message}</p><button className="primary" onClick={() => void startCamera()}>Retry <span aria-hidden="true">↗</span></button><button className="secondary" onClick={() => uploadInputRef.current?.click()}>Upload a photo <span aria-hidden="true">↑</span></button><button className="text-button" onClick={exitScan}>Back home</button></div>}
         {introPlaying && <div key={introSequence} className="scan-intro" aria-hidden="true" onAnimationEnd={(event) => { if (event.target === event.currentTarget) setIntroPlaying(false); }}>
           <p className="eyebrow">BREAKING THE SEAL</p><BlackCapsule opening /><span className="intro-caption">EGO CHECK INCOMING.</span>
         </div>}
@@ -581,6 +688,7 @@ function App() {
     </section>
     <footer><span>THICK SKIN. GOOD LIGHTING.</span><span>FOR ENTERTAINMENT. NOT OBJECTIVE TRUTH.</span><span>MOG / SCAN © {new Date().getFullYear()}</span></footer>
     <canvas ref={frameCanvasRef} className="hidden" /><canvas ref={qualityCanvasRef} className="hidden" />
+    <input ref={uploadInputRef} type="file" accept="image/*" className="hidden" onChange={(event) => { const file = event.target.files?.[0]; event.target.value = ''; if (file) void scanImage(file); }} />
   </main>;
 }
 

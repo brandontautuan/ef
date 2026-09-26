@@ -155,6 +155,15 @@ video { position: absolute; inset: 0; width: 100%; height: 100%; object-fit: cov
 .error-panel h2 { font-size: 36px; line-height: 1.1; letter-spacing: -.05em; margin: 0; }
 .error-panel p:not(.eyebrow) { font-size: 14px; line-height: 1.7; color: #a9a79f; margin: 24px 0; }
 .error-panel .text-button { display: block; margin: 10px auto 0; }
+.error-panel .secondary { margin: 0 auto; }
+/* Hero: start + upload actions */
+.hero-actions { display: flex; flex-wrap: wrap; gap: 12px; align-items: center; }
+.upload-button { min-width: 200px; justify-content: space-between; }
+/* Photo-upload analyzing state */
+.analyzing-panel { width: min(88%, 480px); position: relative; z-index: 3; text-align: center; padding: 40px 24px; animation: rise .4s ease-out; }
+.analyzing-panel .eyebrow { color: var(--red); margin-bottom: 26px; }
+.analyzing-panel p[role="status"] { font-size: 15px; letter-spacing: .04em; color: var(--paper); margin: 26px 0 18px; }
+.analyzing-panel .pill-scene { height: 180px; margin: 0 auto; }
 footer { display: flex; justify-content: space-between; gap: 15px; padding-top: 22px; font-size: 8px; color: #8b8982; }
 .hidden { display: none; }
 @keyframes rise { from { opacity: 0; transform: translateY(10px); } to { opacity: 1; transform: translateY(0); } }
