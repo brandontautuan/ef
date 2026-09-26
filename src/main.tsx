@@ -278,14 +278,35 @@ function App() {
     const video = videoRef.current;
     const canvas = frameCanvasRef.current;
     if (!video || !canvas) return false;
-    const side = Math.min(video.videoWidth, video.videoHeight);
+    const vw = video.videoWidth; const vh = video.videoHeight;
+    if (vw === 0 || vh === 0) return false;
     canvas.width = 640;
     canvas.height = 640;
     const context = canvas.getContext('2d');
     if (!context) return false;
-    const sourceX = Math.max(0, (video.videoWidth - side) / 2);
-    const sourceY = Math.max(0, (video.videoHeight - side) / 2);
-    context.drawImage(video, sourceX, sourceY, side, side, 0, 0, 640, 640);
+    // Crop to the detected face (not a fixed center square), so the model sees a
+    // consistently framed face regardless of distance. A whole-frame crop made the
+    // score track how much of the frame the face filled — far away read as 0.
+    const face = facesRef.current[0];
+    let sx: number; let sy: number; let sSide: number;
+    if (face && face.length) {
+      const xs = face.map((p) => p.x); const ys = face.map((p) => p.y);
+      const left = Math.min(...xs) * vw; const right = Math.max(...xs) * vw;
+      const top = Math.min(...ys) * vh; const bottom = Math.max(...ys) * vh;
+      const cx = (left + right) / 2; const cy = (top + bottom) / 2;
+      // Expand the tight landmark box to include forehead/jaw/margin, then square it.
+      const FACE_MARGIN = 0.5;
+      const boxSide = Math.max(right - left, bottom - top) * (1 + FACE_MARGIN);
+      sSide = Math.min(boxSide, vw, vh); // never exceed the frame
+      sx = Math.min(Math.max(cx - sSide / 2, 0), vw - sSide);
+      sy = Math.min(Math.max(cy - sSide / 2, 0), vh - sSide);
+    } else {
+      // Fallback (no face): centered square, as before.
+      sSide = Math.min(vw, vh);
+      sx = (vw - sSide) / 2;
+      sy = (vh - sSide) / 2;
+    }
+    context.drawImage(video, sx, sy, sSide, sSide, 0, 0, 640, 640);
     return true;
   }, []);
 
