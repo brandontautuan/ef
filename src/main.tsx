@@ -498,7 +498,16 @@ function App() {
     context.strokeStyle = '#343434'; context.strokeRect(35, 35, 1010, 1280);
     context.fillStyle = '#ece9e2'; context.font = '900 42px Arial'; context.fillText('MOG / SCAN', 72, 112);
     context.fillStyle = '#ee553d'; context.font = '20px monospace'; context.fillText('THE BLACK CAPSULE', 720, 108);
-    if (!faceFree && frameCanvasRef.current) context.drawImage(frameCanvasRef.current, 0, 115, 640, 410, 72, 165, 936, 600);
+    if (!faceFree && frameCanvasRef.current) {
+      const frame = frameCanvasRef.current;
+      // Fit the complete capture using one scale factor for both dimensions.
+      // Filling this wide photo area would crop or distort the square face image.
+      const photo = { x: 72, y: 165, width: 936, height: 600 };
+      const scale = Math.min(photo.width / frame.width, photo.height / frame.height);
+      const width = frame.width * scale;
+      const height = frame.height * scale;
+      context.drawImage(frame, photo.x + (photo.width - width) / 2, photo.y + (photo.height - height) / 2, width, height);
+    }
     const scoreY = faceFree ? 640 : 1000;
     context.fillStyle = '#ece9e2'; context.font = '900 220px Arial'; context.fillText(String(result.score), 65, scoreY);
     const scoreWidth = context.measureText(String(result.score)).width;
