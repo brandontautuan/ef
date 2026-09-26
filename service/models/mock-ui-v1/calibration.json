@@ -1,0 +1,12 @@
+{
+  "modelVersion": "mock-model@staging-000+preprocess-v1",
+  "nativeMin": 1.0,
+  "nativeMax": 5.0,
+  "note": "Prototype linear map of a research-scale native score to 0-100 for display only. This is NOT a percentile or population calibration. Tier boundaries are placeholders pending inspection of a consented evaluation distribution.",
+  "tiers": [
+    { "minInclusive": 0, "label": "Warming up" },
+    { "minInclusive": 40, "label": "Looking good" },
+    { "minInclusive": 60, "label": "Standout" },
+    { "minInclusive": 80, "label": "Elite mog" }
+  ]
+}
