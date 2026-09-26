@@ -23,8 +23,9 @@ uvicorn app.main:app --reload --port 8000
 ```
 
 Point the client at it by setting `VITE_SCORE_ENDPOINT=http://localhost:8000/v1/score`
-(the client posts multipart directly to that URL). Set the service `CORS_ORIGINS`
-to the client origin (default `http://localhost:5173`).
+(the client posts multipart directly to that URL). Local development allows
+`http://localhost:5173` and `http://localhost:5174` by default; set
+`CORS_ORIGINS` to the exact deployed client origin in production.
 
 ## Test
 

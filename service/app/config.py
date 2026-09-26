@@ -67,7 +67,7 @@ class Settings:
 
     # CORS: exact deployed client origins. Dev default is the Vite server.
     cors_origins: list[str] = field(
-        default_factory=lambda: _origins("CORS_ORIGINS", ["http://localhost:5173"])
+        default_factory=lambda: _origins("CORS_ORIGINS", ["http://localhost:5173", "http://localhost:5174"])
     )
 
 

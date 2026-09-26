@@ -11,6 +11,7 @@ type Prediction = { nativeScore: number; modelVersion: string; sequence: number 
 const SCAN_TIMEOUT_MS = 28_000;
 const SAMPLE_INTERVAL_MS = 1_100;
 const REQUIRED_PREDICTIONS = 3;
+const scanDebugEnabled = import.meta.env.VITE_SCAN_DEBUG === '1';
 const prompts: Record<QualityFailure, string> = {
   no_face: 'Place one face inside the frame',
   multiple_faces: 'Keep just one face in frame',
@@ -20,6 +21,17 @@ const prompts: Record<QualityFailure, string> = {
   dark: 'Find brighter light',
   blur: 'Hold your phone steady',
   motion: 'Hold steady',
+};
+
+const jokeLines: Partial<Record<QualityFailure, string>> = {
+  dark: 'Your lighting was auditioning for a witness-protection documentary. Find softer front light.',
+  pose: 'The camera asked for front-facing; your head chose an avant-garde side quest.',
+  motion: 'Hold still—the lens cannot rate a plot twist.',
+  blur: 'Give the autofocus a chance to learn your lore.',
+  too_small: 'Move closer. The camera needs a lead actor, not background casting.',
+  cut_off: 'Keep your whole face in frame; the crop was being a little too editorial.',
+  no_face: 'The scan needs one willing protagonist in frame.',
+  multiple_faces: 'One protagonist at a time—the ensemble cast confused the scanner.',
 };
 
 function makeScanId() {
@@ -48,6 +60,22 @@ function tierFor(score: number) {
 
 function isMediaSupported() {
   return Boolean(navigator.mediaDevices?.getUserMedia);
+}
+
+function scanDebug(event: string, details: Record<string, unknown>) {
+  if (scanDebugEnabled) console.info(`[MOG scan] ${event}`, details);
+}
+
+function scanJokes(failures: Record<QualityFailure, number>) {
+  const observed = (Object.entries(failures) as Array<[QualityFailure, number]>)
+    .filter(([, count]) => count > 0)
+    .sort((a, b) => b[1] - a[1])
+    .map(([reason]) => jokeLines[reason])
+    .filter((line): line is string => Boolean(line));
+  return observed.slice(0, 2).length ? observed.slice(0, 2) : [
+    'Clean capture. The camera had no notes—suspiciously professional behavior.',
+    'Your framing stayed locked. Keep that same energy on the next scan.',
+  ];
 }
 
 async function scoreFrame(canvas: HTMLCanvasElement, scanId: string, sequence: number): Promise<Prediction> {
@@ -96,10 +124,11 @@ function App() {
   const qualityCanvasRef = useRef<HTMLCanvasElement>(null);
   const previousFaceCenterRef = useRef<{ x: number; y: number; at: number } | null>(null);
   const validSinceRef = useRef<number | null>(null);
+  const qualityFailuresRef = useRef<Record<QualityFailure, number>>({ no_face: 0, multiple_faces: 0, too_small: 0, cut_off: 0, pose: 0, dark: 0, blur: 0, motion: 0 });
   const [state, setState] = useState<ScanState>('idle');
   const [message, setMessage] = useState('Camera stays off until you start.');
   const [progress, setProgress] = useState(0);
-  const [result, setResult] = useState<{ score: number; tier: string; modelVersion: string } | null>(null);
+  const [result, setResult] = useState<{ score: number; tier: string; modelVersion: string; nativeScores: number[]; medianNativeScore: number; jokes: string[] } | null>(null);
   const [faceFree, setFaceFree] = useState(false);
   const [hud, setHud] = useState<{ faces: number; box: { l: number; t: number; w: number; h: number } | null; eligible: boolean; note: string }>({ faces: 0, box: null, eligible: false, note: 'INITIALIZING' });
 
@@ -132,6 +161,7 @@ function App() {
     sequence.current = 0;
     predictions.current = [];
     requestInFlight.current = false;
+    qualityFailuresRef.current = { no_face: 0, multiple_faces: 0, too_small: 0, cut_off: 0, pose: 0, dark: 0, blur: 0, motion: 0 };
     setProgress(0);
     setResult(null);
   }, [clearScanTimers]);
@@ -256,8 +286,20 @@ function App() {
       setMessage('The model changed during this scan. Please scan again.');
       return;
     }
-    const score = displayScore(median(items.map((item) => item.nativeScore)));
-    setResult({ score, tier: tierFor(score), modelVersion });
+    const nativeScores = items.map((item) => item.nativeScore);
+    const medianNativeScore = median(nativeScores);
+    const score = displayScore(medianNativeScore);
+    scanDebug('result_locked', {
+      frames: items.length,
+      nativeScores: nativeScores.map((value) => Number(value.toFixed(3))),
+      aggregation: 'median',
+      medianNativeScore: Number(medianNativeScore.toFixed(3)),
+      displayFormula: 'clamp(round(((native - 1) / 4) * 100), 0, 100)',
+      displayScore: score,
+      tier: tierFor(score),
+      modelVersion,
+    });
+    setResult({ score, tier: tierFor(score), modelVersion, nativeScores, medianNativeScore, jokes: scanJokes(qualityFailuresRef.current) });
     setState('result');
     setMessage('Result locked from this scan.');
   }, [clearScanTimers]);
@@ -269,6 +311,8 @@ function App() {
     if (stateRef.current !== 'sampling' && stateRef.current !== 'paused') return;
     const assessment = assessFrame();
     if (!assessment.eligible) {
+      qualityFailuresRef.current[assessment.failures[0]] += 1;
+      scanDebug('frame_rejected', { reason: assessment.failures[0], allFailures: assessment.failures, scanId: activeScanId.current });
       validSinceRef.current = null;
       if (stateRef.current !== 'paused') {
         stateRef.current = 'paused';
@@ -285,6 +329,7 @@ function App() {
     }
     if (validSinceRef.current === null) validSinceRef.current = performance.now();
     if (performance.now() - validSinceRef.current < 700) {
+      scanDebug('quality_hold', { requiredMs: 700, scanId: activeScanId.current });
       setMessage('Hold that pose…');
       return;
     }
@@ -297,10 +342,19 @@ function App() {
       if (scanId !== activeScanId.current || (stateRef.current !== 'sampling' && stateRef.current !== 'paused')) return;
       const next = [...predictions.current, prediction];
       predictions.current = next;
+      scanDebug('frame_scored', {
+        scanId,
+        frameSequence,
+        nativeScore: Number(prediction.nativeScore.toFixed(3)),
+        modelVersion: prediction.modelVersion,
+        acceptedFrames: next.length,
+        requiredFrames: REQUIRED_PREDICTIONS,
+      });
       setProgress(Math.round((next.length / REQUIRED_PREDICTIONS) * 100));
       setMessage(next.length === REQUIRED_PREDICTIONS - 1 ? 'One more frame…' : 'Hold that pose…');
       if (next.length >= REQUIRED_PREDICTIONS) finish(next);
     } catch (error) {
+      scanDebug('score_error', { scanId, frameSequence, message: error instanceof Error ? error.message : 'Unknown error' });
       if (scanId === activeScanId.current) {
         clearScanTimers();
         setState('error');
@@ -372,6 +426,7 @@ function App() {
         await videoRef.current.play();
       }
       await initializeTracker();
+      scanDebug('camera_started', { scanId: activeScanId.current, tracker: 'MediaPipe Face Landmarker', requiredFrames: REQUIRED_PREDICTIONS });
       setState('acquiring');
       setMessage('Center your face in the frame');
       window.setTimeout(beginSampling, 800);
@@ -431,12 +486,6 @@ function App() {
               <div className="hw-row"><label>SUBJECTS</label><b>{hud.faces}</b></div>
               <div className="hw-row"><label>SIGNAL</label><b className={hud.eligible ? 'ok' : 'warn'}>{hud.eligible ? 'STABLE' : 'SEEKING'}</b></div>
             </div>
-            <div className="hud-win tr">
-              <div className="hw-head"><span>SUBJECT·01 ◨</span></div>
-              <div className="hw-row"><label>POS-X</label><b>{hud.box ? hud.box.l.toFixed(1) : '--.-'}</b></div>
-              <div className="hw-row"><label>POS-Y</label><b>{hud.box ? hud.box.t.toFixed(1) : '--.-'}</b></div>
-              <div className="hw-row"><label>SPAN</label><b>{hud.box ? hud.box.w.toFixed(0) + '%' : '--'}</b></div>
-            </div>
             <div className="hud-win bl">
               <div className="hw-head"><span>◧ ANALYSIS</span></div>
               <div className={`hw-note ${hud.eligible ? 'ok' : ''}`}>{hud.note}</div>
@@ -449,7 +498,7 @@ function App() {
             </div>}
            </div>}
          </>}
-        {state === 'result' && result && <div className="reveal"><p className="eyebrow">SCAN COMPLETE</p><div className="score">{result.score}</div><div className="tier">{result.tier}</div><p>Model estimate from this scan.<br />Not an objective measure of attractiveness.</p><div className="actions"><button className="primary" onClick={scanAgain}>Scan again <b>↗</b></button><button className="secondary" onClick={downloadCard}>Save card</button></div><label className="toggle"><input type="checkbox" checked={faceFree} onChange={(event) => setFaceFree(event.target.checked)} /> Face-free card</label></div>}
+        {state === 'result' && result && <div className="reveal"><p className="eyebrow">SCAN COMPLETE</p><div className="score">{result.score}</div><div className="tier">{result.tier}</div><p>Model estimate from this scan.<br />Not an objective measure of attractiveness.</p><section className="joke-card"><p className="eyebrow">JOKE MODE · CAMERA NOTES</p>{result.jokes.map((joke) => <p key={joke}>{joke}</p>)}<small>Fictional camera commentary—not health or appearance advice.</small></section>{scanDebugEnabled && <details className="diagnostics" open><summary>How this result was calculated</summary><div><span>Valid frames</span><b>{result.nativeScores.map((value) => value.toFixed(3)).join(' · ')}</b></div><div><span>Aggregation</span><b>Median: {result.medianNativeScore.toFixed(3)} / 5</b></div><div><span>Display map</span><b>((native − 1) ÷ 4) × 100</b></div><div><span>Model</span><b>{result.modelVersion}</b></div></details>}<div className="actions"><button className="primary" onClick={scanAgain}>Scan again <b>↗</b></button><button className="secondary" onClick={downloadCard}>Save card</button></div><label className="toggle"><input type="checkbox" checked={faceFree} onChange={(event) => setFaceFree(event.target.checked)} /> Face-free card</label></div>}
         {state === 'error' && <div className="error-panel"><p className="eyebrow">SCAN PAUSED</p><h2>Let’s try that again.</h2><p>{message}</p><button className="primary" onClick={() => void startCamera()}>Retry <b>↗</b></button><button className="text-button" onClick={exitScan}>Back home</button></div>}
       </div>
       {active && <div className="scan-controls"><div className="progress-line"><span style={{ width: `${progress}%` }} /></div><p>{message}</p><button className="exit" onClick={exitScan}>End scan</button></div>}
