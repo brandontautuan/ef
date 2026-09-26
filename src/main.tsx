@@ -43,15 +43,15 @@ function median(values: number[]) {
   return sorted[Math.floor(sorted.length / 2)];
 }
 
-// Heuristic display calibration. Real-face native scores from this model cluster
-// in a narrow band (~1.8-3.8, mean ~2.7) rather than spanning the full 1-5, so a
-// flat (native-1)/4 map compressed everyone into SUB5. We stretch that observed
-// band across 0-100 instead. The tier thresholds below are the display cut points
-// that reproduce the calibration.json targetShares under an assumed N(2.7, 0.35)
-// distribution. This is an unvalidated stand-in — replace with a data-driven
-// percentile calibration (measured over a consented set) before any real launch.
-const DISPLAY_NATIVE_MIN = 1.8;
-const DISPLAY_NATIVE_MAX = 3.8;
+// Heuristic display calibration. With the face-crop fix, real-face native scores
+// from this model land around ~3.0-3.2 (measured on a live face at normal/close
+// distance), so we center the display band on 3.1 -> 50 with a span of 1.6, i.e.
+// map native [2.3, 3.9] across 0-100. That puts a typical face mid-scale (MTN)
+// with headroom above/below for genuine variation. Still an unvalidated stand-in
+// tuned to one tester — replace with a data-driven percentile calibration
+// (measured over a consented set) before any real launch.
+const DISPLAY_NATIVE_MIN = 2.3;
+const DISPLAY_NATIVE_MAX = 3.9;
 
 function displayScore(nativeScore: number) {
   const span = DISPLAY_NATIVE_MAX - DISPLAY_NATIVE_MIN;
@@ -326,7 +326,7 @@ function App() {
       nativeScores: nativeScores.map((value) => Number(value.toFixed(3))),
       aggregation: 'median',
       medianNativeScore: Number(medianNativeScore.toFixed(3)),
-      displayFormula: 'clamp(round(((native - 1.8) / 2) * 100), 0, 100)',
+      displayFormula: 'clamp(round(((native - 2.3) / 1.6) * 100), 0, 100)',
       displayScore: score,
       tier: tierFor(score),
       modelVersion,
@@ -530,7 +530,7 @@ function App() {
             </div>}
            </div>}
          </>}
-        {state === 'result' && result && <div className="reveal"><p className="eyebrow">SCAN COMPLETE</p><div className="score">{result.score}</div><div className="tier">{result.tier}</div><p>Model estimate from this scan.<br />Not an objective measure of attractiveness.</p><section className="joke-card"><p className="eyebrow">JOKE MODE · CAMERA NOTES</p>{result.jokes.map((joke) => <p key={joke}>{joke}</p>)}<small>Fictional camera commentary—not health or appearance advice.</small></section>{scanDebugEnabled && <details className="diagnostics" open><summary>How this result was calculated</summary><div><span>Valid frames</span><b>{result.nativeScores.map((value) => value.toFixed(3)).join(' · ')}</b></div><div><span>Aggregation</span><b>Median: {result.medianNativeScore.toFixed(3)} / 5</b></div><div><span>Display map</span><b>((native − 1.8) ÷ 2) × 100</b></div><div><span>Model</span><b>{result.modelVersion}</b></div></details>}<div className="actions"><button className="primary" onClick={scanAgain}>Scan again <b>↗</b></button><button className="secondary" onClick={downloadCard}>Save card</button></div><label className="toggle"><input type="checkbox" checked={faceFree} onChange={(event) => setFaceFree(event.target.checked)} /> Face-free card</label></div>}
+        {state === 'result' && result && <div className="reveal"><p className="eyebrow">SCAN COMPLETE</p><div className="score">{result.score}</div><div className="tier">{result.tier}</div><p>Model estimate from this scan.<br />Not an objective measure of attractiveness.</p><section className="joke-card"><p className="eyebrow">JOKE MODE · CAMERA NOTES</p>{result.jokes.map((joke) => <p key={joke}>{joke}</p>)}<small>Fictional camera commentary—not health or appearance advice.</small></section>{scanDebugEnabled && <details className="diagnostics" open><summary>How this result was calculated</summary><div><span>Valid frames</span><b>{result.nativeScores.map((value) => value.toFixed(3)).join(' · ')}</b></div><div><span>Aggregation</span><b>Median: {result.medianNativeScore.toFixed(3)} / 5</b></div><div><span>Display map</span><b>((native − 2.3) ÷ 1.6) × 100</b></div><div><span>Model</span><b>{result.modelVersion}</b></div></details>}<div className="actions"><button className="primary" onClick={scanAgain}>Scan again <b>↗</b></button><button className="secondary" onClick={downloadCard}>Save card</button></div><label className="toggle"><input type="checkbox" checked={faceFree} onChange={(event) => setFaceFree(event.target.checked)} /> Face-free card</label></div>}
         {state === 'error' && <div className="error-panel"><p className="eyebrow">SCAN PAUSED</p><h2>Let’s try that again.</h2><p>{message}</p><button className="primary" onClick={() => void startCamera()}>Retry <b>↗</b></button><button className="text-button" onClick={exitScan}>Back home</button></div>}
       </div>
       {active && <div className="scan-controls"><div className="progress-line"><span style={{ width: `${progress}%` }} /></div><p>{message}</p><button className="exit" onClick={exitScan}>End scan</button></div>}
