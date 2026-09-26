@@ -93,6 +93,7 @@ function App() {
   const [progress, setProgress] = useState(0);
   const [result, setResult] = useState<{ score: number; tier: string; modelVersion: string } | null>(null);
   const [faceFree, setFaceFree] = useState(false);
+  const [hud, setHud] = useState<{ faces: number; box: { l: number; t: number; w: number; h: number } | null; eligible: boolean; note: string }>({ faces: 0, box: null, eligible: false, note: 'INITIALIZING' });
 
   useEffect(() => { stateRef.current = state; }, [state]);
 
@@ -160,6 +161,34 @@ function App() {
     }
     return { eligible: true, failures: [] };
   }, []);
+
+  // Live HUD telemetry: poll the tracker a few times a second and derive the
+  // futuristic readouts. Kept separate from the sampling loop so it never
+  // affects scoring; it only reflects what the tracker already sees.
+  useEffect(() => {
+    if (!(state === 'acquiring' || state === 'sampling' || state === 'paused')) return;
+    const id = window.setInterval(() => {
+      const faces = facesRef.current;
+      const assessment = assessFrame();
+      let box: { l: number; t: number; w: number; h: number } | null = null;
+      if (faces.length === 1) {
+        const xs = faces[0].map((p) => p.x); const ys = faces[0].map((p) => p.y);
+        const left = Math.min(...xs); const right = Math.max(...xs);
+        const top = Math.min(...ys); const bottom = Math.max(...ys);
+        // The video is mirrored (scaleX(-1)), so flip X to match what the user sees.
+        box = { l: (1 - right) * 100, t: top * 100, w: (right - left) * 100, h: (bottom - top) * 100 };
+      }
+      const note = assessment.eligible
+        ? 'LOCK ACQUIRED'
+        : faces.length === 0
+          ? 'AWAITING SUBJECT'
+          : faces.length > 1
+            ? 'MULTIPLE SUBJECTS'
+            : prompts[assessment.failures[0]].toUpperCase();
+      setHud({ faces: faces.length, box, eligible: assessment.eligible, note });
+    }, 140);
+    return () => window.clearInterval(id);
+  }, [state, assessFrame]);
 
   const captureFrame = useCallback(() => {
     const video = videoRef.current;
@@ -317,12 +346,43 @@ function App() {
   }, [faceFree, result]);
 
   const active = ['permission', 'acquiring', 'sampling', 'paused'].includes(state);
+  const tracking = state === 'acquiring' || state === 'sampling' || state === 'paused';
+  const framesDone = Math.round((progress / 100) * REQUIRED_PREDICTIONS);
   return <main className="app-shell">
     <header><a className="brand" href="#top" onClick={exitScan}>MOG<span>/</span>SCAN</a><span className="status"><i className={active ? 'live' : ''} />{active ? 'CAMERA ACTIVE' : 'CAMERA OFF'}</span></header>
     <section className={`scan-card ${state}`}>
       <div className="video-stage">
         {state === 'idle' && <div className="hero"><p className="eyebrow">LIVE CAMERA EXPERIENCE</p><h1>Find your<br /><em>frame.</em></h1><p>Three steady moments. One model estimate. No uploads until your scan starts.</p><button className="primary" onClick={() => void startCamera()}>Start scan <b>↗</b></button></div>}
-        {state !== 'idle' && state !== 'result' && <><video ref={videoRef} muted playsInline autoPlay /><div className="grid" /><div className="face-guide"><span /><span /><span /><span /></div></>}
+        {state !== 'idle' && state !== 'result' && <>
+          <video ref={videoRef} muted playsInline autoPlay />
+          <div className="grid" />
+          {state === 'sampling' && <div className="scanline" />}
+          <div className="face-guide"><span /><span /><span /><span /></div>
+          {tracking && <div className="hud">
+            <div className="hud-win tl">
+              <div className="hw-head"><span>◧ TRACKING</span><i className="dot" /></div>
+              <div className="hw-row"><label>MODE</label><b>{state === 'sampling' ? 'SAMPLING' : state === 'paused' ? 'HOLD' : 'ACQUIRE'}</b></div>
+              <div className="hw-row"><label>SUBJECTS</label><b>{hud.faces}</b></div>
+              <div className="hw-row"><label>SIGNAL</label><b className={hud.eligible ? 'ok' : 'warn'}>{hud.eligible ? 'STABLE' : 'SEEKING'}</b></div>
+            </div>
+            <div className="hud-win tr">
+              <div className="hw-head"><span>SUBJECT·01 ◨</span></div>
+              <div className="hw-row"><label>POS-X</label><b>{hud.box ? hud.box.l.toFixed(1) : '--.-'}</b></div>
+              <div className="hw-row"><label>POS-Y</label><b>{hud.box ? hud.box.t.toFixed(1) : '--.-'}</b></div>
+              <div className="hw-row"><label>SPAN</label><b>{hud.box ? hud.box.w.toFixed(0) + '%' : '--'}</b></div>
+            </div>
+            <div className="hud-win bl">
+              <div className="hw-head"><span>◧ ANALYSIS</span></div>
+              <div className={`hw-note ${hud.eligible ? 'ok' : ''}`}>{hud.note}</div>
+              <div className="hw-meter"><span style={{ width: `${progress}%` }} /></div>
+              <div className="hw-row"><label>FRAMES</label><b>{framesDone}/{REQUIRED_PREDICTIONS}</b></div>
+            </div>
+            {hud.box && <div className="subject-tag" style={{ left: `${hud.box.l}%`, top: `${hud.box.t}%`, width: `${hud.box.w}%`, height: `${hud.box.h}%` }}>
+              <span className="st-label">{hud.eligible ? '● LOCK' : '○ SEEK'}</span>
+              <i /><i /><i /><i />
+            </div>}
+          </div>}
+        </>}
         {state === 'result' && result && <div className="reveal"><p className="eyebrow">SCAN COMPLETE</p><div className="score">{result.score}</div><div className="tier">{result.tier}</div><p>Model estimate from this scan.<br />Not an objective measure of attractiveness.</p><div className="actions"><button className="primary" onClick={scanAgain}>Scan again <b>↗</b></button><button className="secondary" onClick={downloadCard}>Save card</button></div><label className="toggle"><input type="checkbox" checked={faceFree} onChange={(event) => setFaceFree(event.target.checked)} /> Face-free card</label></div>}
         {state === 'error' && <div className="error-panel"><p className="eyebrow">SCAN PAUSED</p><h2>Let’s try that again.</h2><p>{message}</p><button className="primary" onClick={() => void startCamera()}>Retry <b>↗</b></button><button className="text-button" onClick={exitScan}>Back home</button></div>}
       </div>

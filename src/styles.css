@@ -14,4 +14,40 @@ video { width: 100%; height: 100%; position: absolute; object-fit: cover; transf
 .scan-controls { position: absolute; z-index: 4; bottom: 0; left: 0; right: 0; padding: 23px 28px 20px; background: linear-gradient(transparent, #080a12 37%); text-align: center; } .scan-controls p { margin: 12px 0 4px; font-size: 15px; font-weight: 700; } .progress-line { margin: auto; height: 4px; max-width: 330px; border-radius: 5px; background: #ffffff22; overflow:hidden; } .progress-line span { display:block; height:100%; background:#d7ff36; transition:width .3s ease; } .exit, .text-button { color:#c3c8d0; background: none; border: 0; text-decoration: underline; font-size: 13px; padding: 9px; }
 .reveal { animation: rise .55s ease-out; } .score { font-size: clamp(130px, 23vw, 255px); letter-spacing: -.12em; line-height: .75; font-weight: 900; color:#d7ff36; text-shadow: 6px 6px 0 #ef5a37; } .tier { margin-top: 34px; color:#ef5a37; font-size: clamp(25px, 4vw, 45px); letter-spacing: .08em; font-weight: 900; } .toggle { display:block; margin-top:20px; color:#c3c8d0; font-size:13px; } .toggle input { accent-color:#d7ff36; }
 .error-panel { border: 1px solid #ef5a3777; padding: 45px 30px; border-radius: 20px; background:#111522; } .error-panel h2 { font-size: 38px; letter-spacing: -.06em; margin: 0; } .error-panel .text-button { display:block; margin: 14px auto 0; } footer { padding: 20px 4px 0; gap: 10px; justify-content: center; flex-wrap: wrap; } footer span { padding:0 10px; border-right:1px solid #353b47; } footer span:last-child { border:0; } .hidden { display:none; } @keyframes rise { from { opacity: 0; transform: translateY(15px); } to { opacity: 1; transform: translateY(0); } }
-@media (max-width: 600px) { .app-shell { padding: 18px 14px 14px; } .scan-card, .video-stage { min-height: 570px; border-radius: 20px; } .face-guide { width: 55vw; } .hero > p:not(.eyebrow) { font-size: 15px; margin: 25px auto; } footer { font-size: 9px; } }
+/* ---- Futuristic floating HUD windows ---- */
+.hud { position: absolute; inset: 0; z-index: 5; pointer-events: none; font-family: 'DM Mono', monospace; }
+.hud-win { position: absolute; min-width: 158px; padding: 11px 13px 12px; border: 1px solid #d7ff3640; border-radius: 12px; background: linear-gradient(150deg, #10141fd9, #0b0e17b3); backdrop-filter: blur(7px); -webkit-backdrop-filter: blur(7px); box-shadow: 0 14px 40px #0007, inset 0 0 24px #d7ff360a; animation: floaty 6.5s ease-in-out infinite; }
+.hud-win::before, .hud-win::after { content: ''; position: absolute; width: 12px; height: 12px; border: 1px solid #d7ff36; opacity: .8; }
+.hud-win::before { top: -1px; left: -1px; border-width: 2px 0 0 2px; border-radius: 4px 0 0 0; }
+.hud-win::after { bottom: -1px; right: -1px; border-width: 0 2px 2px 0; border-radius: 0 0 4px 0; }
+.hud-win.tl { top: 18px; left: 18px; }
+.hud-win.tr { top: 18px; right: 18px; animation-delay: -2.2s; text-align: right; }
+.hud-win.bl { bottom: 104px; left: 18px; animation-delay: -4.4s; min-width: 190px; }
+.hw-head { display: flex; align-items: center; justify-content: space-between; gap: 14px; font-size: 10px; letter-spacing: .14em; color: #d7ff36; text-transform: uppercase; margin-bottom: 9px; text-shadow: 0 0 10px #d7ff3666; }
+.hw-head .dot { width: 6px; height: 6px; border-radius: 50%; background: #d7ff36; box-shadow: 0 0 9px #d7ff36; animation: blink 1.5s steps(1) infinite; }
+.hw-row { display: flex; align-items: center; justify-content: space-between; gap: 18px; font-size: 11px; padding: 3px 0; color: #838b99; letter-spacing: .06em; }
+.hud-win.tr .hw-row { flex-direction: row-reverse; }
+.hw-row label { letter-spacing: .12em; }
+.hw-row b { color: #f2efe8; font-weight: 500; font-variant-numeric: tabular-nums; }
+.hw-row b.ok { color: #d7ff36; } .hw-row b.warn { color: #ef5a37; }
+.hw-note { font-size: 12px; letter-spacing: .09em; color: #ef5a37; margin-bottom: 9px; min-height: 15px; }
+.hw-note.ok { color: #d7ff36; text-shadow: 0 0 10px #d7ff3655; }
+.hw-meter { height: 3px; border-radius: 4px; background: #ffffff1c; overflow: hidden; margin-bottom: 9px; }
+.hw-meter span { display: block; height: 100%; background: #d7ff36; box-shadow: 0 0 8px #d7ff36; transition: width .3s ease; }
+/* Subject bounding box that follows the detected face */
+.subject-tag { position: absolute; border: 1px solid #d7ff3677; border-radius: 8px; box-shadow: inset 0 0 34px #d7ff3612, 0 0 16px #d7ff3626; transition: all .12s linear; }
+.subject-tag i { position: absolute; width: 13px; height: 13px; border: 2px solid #d7ff36; }
+.subject-tag i:nth-child(2) { top: -2px; left: -2px; border-width: 2px 0 0 2px; }
+.subject-tag i:nth-child(3) { top: -2px; right: -2px; border-width: 2px 2px 0 0; }
+.subject-tag i:nth-child(4) { bottom: -2px; left: -2px; border-width: 0 0 2px 2px; }
+.subject-tag i:nth-child(5) { bottom: -2px; right: -2px; border-width: 0 2px 2px 0; }
+.st-label { position: absolute; top: -21px; left: -1px; font-size: 10px; letter-spacing: .12em; color: #080a12; background: #d7ff36; padding: 2px 7px; border-radius: 4px; white-space: nowrap; font-weight: 700; }
+/* Sampling scanline sweep */
+.scanline { position: absolute; left: 0; right: 0; height: 2px; z-index: 4; background: linear-gradient(90deg, transparent, #d7ff36cc, transparent); box-shadow: 0 0 14px #d7ff36; animation: sweep 3.4s linear infinite; }
+@keyframes floaty { 0%, 100% { transform: translateY(0); } 50% { transform: translateY(-6px); } }
+@keyframes blink { 0%, 62% { opacity: 1; } 63%, 100% { opacity: .18; } }
+@keyframes sweep { 0% { top: 2%; } 100% { top: 98%; } }
+@media (prefers-reduced-motion: reduce) { .hud-win, .scanline { animation: none; } }
+
+@media (max-width: 600px) { .app-shell { padding: 18px 14px 14px; } .scan-card, .video-stage { min-height: 570px; border-radius: 20px; } .face-guide { width: 55vw; } .hero > p:not(.eyebrow) { font-size: 15px; margin: 25px auto; } footer { font-size: 9px; }
+  .hud-win { min-width: 0; padding: 8px 10px; transform: scale(.86); transform-origin: top left; } .hud-win.tl { top: 12px; left: 12px; } .hud-win.tr { top: 12px; right: 12px; transform-origin: top right; } .hud-win.bl { display: none; } .hw-row { font-size: 10px; gap: 10px; } }
