@@ -191,12 +191,24 @@ function App() {
   }, [clearScanTimers]);
 
   const sample = useCallback(async () => {
-    if (requestInFlight.current || stateRef.current !== 'sampling') return;
+    // The loop stays active in both 'sampling' and 'paused' so it can recover
+    // when quality returns; it only stops once the scan leaves those states.
+    if (requestInFlight.current) return;
+    if (stateRef.current !== 'sampling' && stateRef.current !== 'paused') return;
     const assessment = assessFrame();
     if (!assessment.eligible) {
-      setState('paused');
+      if (stateRef.current !== 'paused') {
+        stateRef.current = 'paused';
+        setState('paused');
+      }
       setMessage(prompts[assessment.failures[0]]);
       return;
+    }
+    // Quality recovered (or held steady): resume sampling, keeping any progress.
+    if (stateRef.current !== 'sampling') {
+      stateRef.current = 'sampling';
+      setState('sampling');
+      setMessage('Hold that pose…');
     }
     if (!captureFrame()) return;
     requestInFlight.current = true;
@@ -204,7 +216,7 @@ function App() {
     const frameSequence = ++sequence.current;
     try {
       const prediction = await scoreFrame(frameCanvasRef.current!, scanId, frameSequence);
-      if (scanId !== activeScanId.current || stateRef.current !== 'sampling') return;
+      if (scanId !== activeScanId.current || (stateRef.current !== 'sampling' && stateRef.current !== 'paused')) return;
       const next = [...predictions.current, prediction];
       predictions.current = next;
       setProgress(Math.round((next.length / REQUIRED_PREDICTIONS) * 100));
