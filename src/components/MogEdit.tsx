@@ -4,9 +4,9 @@ import { buildMogTimeline, type EditFace } from '../mogTimeline';
 import moggedStamp from '../assets/mogged.png';
 import editTrack from '../assets/edit-track.mp3';
 
-type MogEditProps = { faces: EditFace[]; loading: boolean; onClose: () => void };
+type MogEditProps = { faces: EditFace[]; loading: boolean; fixedParticipants?: boolean; onClose: () => void };
 
-export function MogEdit({ faces, loading, onClose }: MogEditProps) {
+export function MogEdit({ faces, loading, fixedParticipants = false, onClose }: MogEditProps) {
   const [personAId, setPersonAId] = useState('');
   const [personBId, setPersonBId] = useState('');
   const [playing, setPlaying] = useState(false);
@@ -91,11 +91,8 @@ export function MogEdit({ faces, loading, onClose }: MogEditProps) {
             <div className="edit-progress"><i style={{ width: `${Math.min(100, elapsedMs / timeline.durationMs * 100)}%` }} /></div>
           </div>
           <aside className="edit-controls-panel">
-            <div className="edit-selectors">
-              <label>Subject A<select value={personAId} onChange={(event) => { stop(); setPersonAId(event.target.value); }}>{faces.map((face) => <option key={face.id} value={face.id} disabled={face.id === personBId}>{face.displayName}</option>)}</select></label>
-              <label>Subject B<select value={personBId} onChange={(event) => { stop(); setPersonBId(event.target.value); }}>{faces.map((face) => <option key={face.id} value={face.id} disabled={face.id === personAId}>{face.displayName}</option>)}</select></label>
-            </div>
-            <div className="actions edit-actions"><button className="primary" onClick={() => void play()}>{playing ? 'Restart edit' : elapsedMs ? 'Replay edit' : 'Generate edit'} <span aria-hidden="true">↗</span></button><button className="secondary" onClick={swap}>Swap</button><button className="secondary" onClick={toggleMute}>{muted ? 'Unmute' : 'Mute'}</button></div>
+            {!fixedParticipants && <div className="edit-selectors"><label>Subject A<select value={personAId} onChange={(event) => { stop(); setPersonAId(event.target.value); }}>{faces.map((face) => <option key={face.id} value={face.id} disabled={face.id === personBId}>{face.displayName}</option>)}</select></label><label>Subject B<select value={personBId} onChange={(event) => { stop(); setPersonBId(event.target.value); }}>{faces.map((face) => <option key={face.id} value={face.id} disabled={face.id === personAId}>{face.displayName}</option>)}</select></label></div>}
+            <div className="actions edit-actions"><button className="primary" onClick={() => void play()}>{playing ? 'Restart edit' : elapsedMs ? 'Replay edit' : 'Generate edit'} <span aria-hidden="true">↗</span></button>{!fixedParticipants && <button className="secondary" onClick={swap}>Swap</button>}<button className="secondary" onClick={toggleMute}>{muted ? 'Unmute' : 'Mute'}</button></div>
             <p className="edit-note">15-second local playback · bundled track · result uses the two saved scan scores, not a new scan.</p>
           </aside>
         </div>

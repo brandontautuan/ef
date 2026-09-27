@@ -14,6 +14,8 @@ type Landmark = { x: number; y: number; z: number };
 type QualityFailure = 'no_face' | 'multiple_faces' | 'too_small' | 'cut_off' | 'pose' | 'dark' | 'blur' | 'motion';
 type QualityAssessment = { eligible: boolean; failures: QualityFailure[] };
 type Prediction = { nativeScore: number; modelVersion: string; sequence: number };
+type ScanResult = { score: number; tier: string; modelVersion: string; nativeScores: number[]; medianNativeScore: number };
+type LocalDuel = { phase: 'first' | 'handoff' | 'second' | 'editing'; first?: EditFace; second?: EditFace };
 
 const SCAN_TIMEOUT_MS = 28_000;
 const SAMPLE_INTERVAL_MS = 1_100;
@@ -210,20 +212,24 @@ function App() {
   const qualityCanvasRef = useRef<HTMLCanvasElement>(null);
   const uploadInputRef = useRef<HTMLInputElement>(null);
   const editUrlsRef = useRef<string[]>([]);
+  const duelUrlsRef = useRef<string[]>([]);
+  const duelRef = useRef<LocalDuel | null>(null);
   const previousFaceCenterRef = useRef<{ x: number; y: number; at: number } | null>(null);
   const validSinceRef = useRef<number | null>(null);
   const [state, setState] = useState<ScanState>('idle');
   const [message, setMessage] = useState('Camera stays off until you start.');
   const [progress, setProgress] = useState(0);
-  const [result, setResult] = useState<{ score: number; tier: string; modelVersion: string; nativeScores: number[]; medianNativeScore: number } | null>(null);
+  const [result, setResult] = useState<ScanResult | null>(null);
   const [faceFree, setFaceFree] = useState(false);
   const [introPlaying, setIntroPlaying] = useState(false);
   const [introSequence, setIntroSequence] = useState(0);
   const [hud, setHud] = useState<{ faces: number; box: { l: number; t: number; w: number; h: number } | null; eligible: boolean; note: string }>({ faces: 0, box: null, eligible: false, note: 'INITIALIZING' });
   const [leaderboardOpen, setLeaderboardOpen] = useState(false); const [saveOpen, setSaveOpen] = useState(false); const [displayName, setDisplayName] = useState(''); const [entries, setEntries] = useState<LeaderboardEntry[]>(() => loadLeaderboard()); const [leaderboardError, setLeaderboardError] = useState('');
   const [editOpen, setEditOpen] = useState(false); const [editLoading, setEditLoading] = useState(false); const [editFaces, setEditFaces] = useState<EditFace[]>([]);
+  const [duel, setDuel] = useState<LocalDuel | null>(null);
 
   useEffect(() => { stateRef.current = state; }, [state]);
+  useEffect(() => { duelRef.current = duel; }, [duel]);
 
   const stopCamera = useCallback(() => {
     streamRef.current?.getTracks().forEach((track) => track.stop());
@@ -262,6 +268,7 @@ function App() {
 
   useEffect(() => () => { activeScanId.current = makeScanId(); clearScanTimers(); stopTracking(); stopCamera(); }, [clearScanTimers, stopCamera, stopTracking]);
   useEffect(() => () => { editUrlsRef.current.forEach((url) => URL.revokeObjectURL(url)); }, []);
+  useEffect(() => () => { duelUrlsRef.current.forEach((url) => URL.revokeObjectURL(url)); }, []);
 
   useEffect(() => {
     if (state === 'result' || state === 'error' || state === 'idle') {
@@ -374,6 +381,29 @@ function App() {
     return cropFaceToCanvas(video, video.videoWidth, video.videoHeight, facesRef.current[0], canvas);
   }, []);
 
+  const lockDuelResult = useCallback((scanResult: ScanResult) => {
+    const currentDuel = duelRef.current;
+    const slot = currentDuel?.phase;
+    const canvas = frameCanvasRef.current;
+    if (!currentDuel || !canvas || (slot !== 'first' && slot !== 'second')) return false;
+    clearScanTimers(); stopTracking(); stopCamera();
+    stateRef.current = 'analyzing'; setState('analyzing'); setMessage(`Locking Player ${slot === 'first' ? '1' : '2'}…`);
+    canvas.toBlob((photo) => {
+      if (!photo || duelRef.current?.phase !== slot) { setState('error'); setMessage('Could not keep the selected frame. Please retry the duel.'); return; }
+      const imageUrl = URL.createObjectURL(photo);
+      duelUrlsRef.current.push(imageUrl);
+      const now = new Date().toISOString();
+      const contender: EditFace = { id: makeScanId(), displayName: slot === 'first' ? 'PLAYER 1' : 'PLAYER 2', score: scanResult.score, tier: scanResult.tier, modelVersion: scanResult.modelVersion, createdAt: now, updatedAt: now, imageUrl, lowResolution: false };
+      if (slot === 'first') {
+        const next: LocalDuel = { phase: 'handoff', first: contender };
+        duelRef.current = next; setDuel(next); setState('idle'); setMessage('Player 1 locked. Pass the phone.'); return;
+      }
+      const next: LocalDuel = { phase: 'editing', first: currentDuel.first, second: contender };
+      duelRef.current = next; setDuel(next); setEditLoading(false); setEditOpen(true); setState('idle'); setMessage('Both players locked.');
+    }, 'image/jpeg', .9);
+    return true;
+  }, [clearScanTimers, stopCamera, stopTracking]);
+
   const finish = useCallback((items: Prediction[]) => {
     clearScanTimers();
     const modelVersion = items[0].modelVersion;
@@ -395,10 +425,12 @@ function App() {
       tier: tierFor(score),
       modelVersion,
     });
-    setResult({ score, tier: tierFor(score), modelVersion, nativeScores, medianNativeScore });
+    const scanResult = { score, tier: tierFor(score), modelVersion, nativeScores, medianNativeScore };
+    if (lockDuelResult(scanResult)) return;
+    setResult(scanResult);
     setState('result');
     setMessage('Result locked from this scan.');
-  }, [clearScanTimers]);
+  }, [clearScanTimers, lockDuelResult]);
 
   const sample = useCallback(async () => {
     // The loop stays active in both 'sampling' and 'paused' so it can recover
@@ -545,6 +577,28 @@ function App() {
     }
   }, [beginSampling, clearScanTimers, initializeTracker, resetScan, stopCamera, stopTracking]);
 
+  const clearDuel = useCallback(() => {
+    duelUrlsRef.current.forEach((url) => URL.revokeObjectURL(url));
+    duelUrlsRef.current = [];
+    duelRef.current = null;
+    setDuel(null);
+  }, []);
+
+  const startLocalDuel = useCallback(() => {
+    clearDuel();
+    const next: LocalDuel = { phase: 'first' };
+    duelRef.current = next; setDuel(next);
+    void startCamera();
+  }, [clearDuel, startCamera]);
+
+  const startSecondDuelScan = useCallback(() => {
+    const currentDuel = duelRef.current;
+    if (!currentDuel?.first) return;
+    const next: LocalDuel = { phase: 'second', first: currentDuel.first };
+    duelRef.current = next; setDuel(next);
+    void startCamera();
+  }, [startCamera]);
+
   // Photo-upload path: detect a face in a still image, run the geometric quality
   // gate, crop to the face, and score that single crop. Only the crop is sent
   // (never the raw upload), and the object URL + detector are released after.
@@ -602,8 +656,8 @@ function App() {
   const exitScan = useCallback(() => {
     setIntroPlaying(false);
     activeScanId.current = makeScanId();
-    clearScanTimers(); stopTracking(); stopCamera(); stateRef.current = 'idle'; setState('idle'); setMessage('Camera stays off until you start.'); setProgress(0); setResult(null);
-  }, [clearScanTimers, stopCamera, stopTracking]);
+    clearDuel(); clearScanTimers(); stopTracking(); stopCamera(); stateRef.current = 'idle'; setState('idle'); setMessage('Camera stays off until you start.'); setProgress(0); setResult(null);
+  }, [clearDuel, clearScanTimers, stopCamera, stopTracking]);
 
   const downloadCard = useCallback(() => {
     if (!result) return;
@@ -665,6 +719,7 @@ function App() {
   const tracking = state === 'acquiring' || state === 'sampling' || state === 'paused';
   const framesDone = Math.round((progress / 100) * REQUIRED_PREDICTIONS);
   const verdict = result ? resultCopy[result.tier] : null;
+  const duelFaces = duel?.phase === 'editing' && duel.first && duel.second ? [duel.first, duel.second] : editFaces;
   return <main className="app-shell">
     <header>
       <a className="brand" href="#top" onClick={exitScan}><i className="brand-capsule" />MOG<span>/</span>SCAN</a>
@@ -676,19 +731,26 @@ function App() {
     <section className={`scan-card ${state}`}>
       <div className="stage-label"><span>UNFILTERED / UNSERIOUS</span><span>{state === 'idle' ? 'READY WHEN YOU ARE' : state === 'result' ? 'VERDICT DELIVERED' : 'LIVE SESSION'}</span></div>
       <div className="video-stage">
-        {state === 'idle' && <div className="hero">
+        {state === 'idle' && !duel && <div className="hero">
           <div className="hero-copy">
             <p className="eyebrow"><span className="tiny-cross">✳</span> A SMALL DOSE OF EGO CHECK</p>
             <h1>Take the<br /><em>black pill.</em></h1>
             <p className="hero-description">Three frames. One score. Zero glazing.<br />Your camera roll is about to get humbled.</p>
             <div className="hero-actions">
               <button className="primary start-button" onClick={() => void startCamera()}>Start scan <span aria-hidden="true">↗</span></button>
+              <button className="secondary upload-button" onClick={startLocalDuel}>1V1 MOG OFF <span aria-hidden="true">↗</span></button>
               <button className="secondary upload-button" onClick={() => uploadInputRef.current?.click()}>Upload a photo <span aria-hidden="true">↑</span></button>
             </div>
             <p className="consent-note">Camera starts on your say-so. Selected frames only. Uploads send just the cropped face.</p>
           </div>
           <BlackCapsule />
           <div className="hero-bottom"><span><b>01</b> FACE THE CAMERA</span><span><b>02</b> HOLD YOUR POSE</span><span><b>03</b> TAKE THE ROAST</span></div>
+        </div>}
+        {state === 'idle' && duel?.phase === 'handoff' && <div className="duel-panel">
+          <p className="eyebrow"><span className="tiny-cross">✳</span> LOCAL 1V1 · NO SCORES YET</p>
+          <h1>Player 1<br /><em>locked.</em></h1>
+          <p className="hero-description">Pass the phone. Player 2 gets the same scan—then the edit decides it.</p>
+          <div className="hero-actions"><button className="primary start-button" onClick={startSecondDuelScan}>Scan Player 2 <span aria-hidden="true">↗</span></button><button className="secondary upload-button" onClick={exitScan}>Cancel duel</button></div>
         </div>}
         {state !== 'idle' && state !== 'result' && state !== 'analyzing' && <>
           <video ref={videoRef} muted playsInline autoPlay />
@@ -744,7 +806,7 @@ function App() {
     <footer><span>THICK SKIN. GOOD LIGHTING.</span><span>FOR ENTERTAINMENT. NOT OBJECTIVE TRUTH.</span><span>MOG / SCAN © {new Date().getFullYear()}</span></footer>
     {saveOpen && <div className="modal"><div className="modal-card"><h2>Save locally</h2><p>Your name, score, tier, date, and this scan photo save in this browser. The photo is only used for local Who Mogs Who? playback.</p><input value={displayName} onChange={(e) => setDisplayName(e.target.value)} placeholder="Display name" maxLength={20} />{leaderboardError && <p>{leaderboardError}</p>}<div className="actions"><button className="primary" onClick={() => void saveToLeaderboard()}>Save</button><button className="secondary" onClick={() => setSaveOpen(false)}>Cancel</button></div></div></div>}
     {leaderboardOpen && <div className="modal"><div className="modal-card leaderboard"><h2>Local leaderboard</h2>{entries.length ? <ol>{entries.map((entry, i) => <li key={entry.id}><span>#{i + 1} {entry.displayName}</span><b>{entry.score} · {entry.tier}</b><button className="text-button" onClick={() => { const next = entries.filter((item) => item.id !== entry.id); saveLeaderboard(next); setEntries(next); void deleteLeaderboardPhoto(entry.id); }}>Delete</button></li>)}</ol> : <p>No saved scores.</p>}<div className="actions leaderboard-actions"><button className="secondary" onClick={() => { setLeaderboardOpen(false); void openMogEdit(); }}>Who Mogs Who?</button><button className="secondary" onClick={() => { if (window.confirm('Clear local records and photos?')) { clearLeaderboard(); void clearLeaderboardPhotos(); setEntries([]); } }}>Clear all</button><button className="primary" onClick={() => setLeaderboardOpen(false)}>Done</button></div></div></div>}
-    {editOpen && <MogEdit faces={editFaces} loading={editLoading} onClose={() => setEditOpen(false)} />}
+    {editOpen && <MogEdit faces={duelFaces} loading={editLoading} fixedParticipants={duel?.phase === 'editing'} onClose={() => { setEditOpen(false); if (duelRef.current?.phase === 'editing') clearDuel(); }} />}
     <canvas ref={frameCanvasRef} className="hidden" /><canvas ref={qualityCanvasRef} className="hidden" />
     <input ref={uploadInputRef} type="file" accept="image/*" className="hidden" onChange={(event) => { const file = event.target.files?.[0]; event.target.value = ''; if (file) void scanImage(file); }} />
   </main>;

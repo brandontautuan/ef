@@ -39,6 +39,9 @@ header { display: flex; align-items: center; justify-content: space-between; gap
 .scan-card.idle .video-stage { background: radial-gradient(ellipse at 77% 42%, #30302d45, transparent 48%); }
 .hero { position: relative; width: 100%; min-height: 660px; display: grid; grid-template-columns: 1.05fr 1fr; align-items: center; padding: 65px 5% 115px; }
 .hero-copy { position: relative; z-index: 2; }
+.duel-panel { width: min(100%, 680px); padding: 60px 5%; text-align: center; }
+.duel-panel .hero-description { max-width: 440px; margin-left: auto; margin-right: auto; }
+.duel-panel .hero-actions { justify-content: center; }
 .eyebrow { font: 10px var(--mono); letter-spacing: .11em; color: var(--muted); margin: 0 0 28px; }
 .tiny-cross { color: var(--red); margin-right: 9px; font-size: 14px; }
 h1 { font: 800 clamp(76px, 8.8vw, 144px)/.86 'Barlow Condensed', Impact, sans-serif; letter-spacing: -.035em; text-transform: uppercase; margin: 0; }
@@ -228,6 +231,7 @@ footer { display: flex; justify-content: space-between; gap: 15px; padding-top: 
   .stage-label { padding: 13px 12px; font-size: 7px; letter-spacing: .045em; }
   .stage-label > span:first-child::before { padding-right: 6px; }
   .hero { display: flex; flex-direction: column; align-items: stretch; min-height: 0; padding: 34px 22px 0; }
+  .duel-panel { padding: 34px 22px; }
   .hero-copy > .eyebrow { font-size: 8px; margin-bottom: 22px; }
   h1 { font-size: clamp(72px, 18vw, 106px); }
   .hero-description { font-size: 13px; margin: 22px 0; }
