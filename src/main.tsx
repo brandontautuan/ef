@@ -64,6 +64,21 @@ function loadImage(src: string): Promise<HTMLImageElement> {
   });
 }
 
+// Ensure the web fonts the result card draws with are loaded before rendering to
+// canvas; otherwise the first render falls back to a system font.
+async function ensureCardFonts(): Promise<void> {
+  try {
+    await Promise.all([
+      document.fonts.load('800 230px "Barlow Condensed"'),
+      document.fonts.load('500 66px "Barlow Condensed"'),
+      document.fonts.load('900 40px "DM Sans"'),
+      document.fonts.load('700 42px "DM Sans"'),
+      document.fonts.load('500 26px "DM Mono"'),
+    ]);
+    await document.fonts.ready;
+  } catch { /* fall back to system fonts */ }
+}
+
 // Geometric subset of the quality gate: one face, size, framing, and pose.
 // Shared by the still-image upload path (motion/brightness checks are live-only).
 function geometricGate(faces: Landmark[][]): QualityAssessment {
@@ -228,6 +243,7 @@ function App() {
   const [progress, setProgress] = useState(0);
   const [result, setResult] = useState<ScanResult | null>(null);
   const [faceFree, setFaceFree] = useState(false);
+  const [cardPreview, setCardPreview] = useState<string | null>(null);
   const [introPlaying, setIntroPlaying] = useState(false);
   const [introSequence, setIntroSequence] = useState(0);
   const [hud, setHud] = useState<{ faces: number; box: { l: number; t: number; w: number; h: number } | null; eligible: boolean; note: string }>({ faces: 0, box: null, eligible: false, note: 'INITIALIZING' });
@@ -666,35 +682,88 @@ function App() {
     clearDuel(); clearScanTimers(); stopTracking(); stopCamera(); stateRef.current = 'idle'; setState('idle'); setMessage('Camera stays off until you start.'); setProgress(0); setResult(null);
   }, [clearDuel, clearScanTimers, stopCamera, stopTracking]);
 
-  const downloadCard = useCallback(() => {
-    if (!result) return;
-    const canvas = document.createElement('canvas');
+  // Render the shareable "receipt" card, matched to the site theme (matte black,
+  // Barlow Condensed score, DM Mono labels, red accents, hairline border). Used by
+  // both the on-screen preview and the download so they stay identical.
+  const renderCard = useCallback((canvas: HTMLCanvasElement): boolean => {
+    if (!result) return false;
     canvas.width = 1080; canvas.height = 1350;
-    const context = canvas.getContext('2d');
-    if (!context) return;
-    context.fillStyle = '#090909'; context.fillRect(0, 0, canvas.width, canvas.height);
-    context.strokeStyle = '#343434'; context.strokeRect(35, 35, 1010, 1280);
-    context.fillStyle = '#ece9e2'; context.font = '900 42px Arial'; context.fillText('MOG / SCAN', 72, 112);
-    context.fillStyle = '#ee553d'; context.font = '20px monospace'; context.fillText('THE BLACK CAPSULE', 720, 108);
+    const ctx = canvas.getContext('2d');
+    if (!ctx) return false;
+    const PAPER = '#ece9e2'; const MUTED = '#8f8e88'; const RED = '#ee553d';
+    ctx.fillStyle = '#0c0c0b'; ctx.fillRect(0, 0, 1080, 1350);
+    ctx.strokeStyle = 'rgba(255,255,255,.14)'; ctx.lineWidth = 2; ctx.strokeRect(33, 33, 1014, 1284);
+    ctx.textBaseline = 'alphabetic';
+    // Header: MOG / SCAN with a red slash, plus the edition tag.
+    ctx.font = '900 40px "DM Sans", Arial, sans-serif';
+    ctx.fillStyle = PAPER; ctx.fillText('MOG', 72, 118);
+    const mogW = ctx.measureText('MOG').width;
+    ctx.fillStyle = RED; ctx.fillText(' / ', 72 + mogW, 118);
+    const slashW = ctx.measureText(' / ').width;
+    ctx.fillStyle = PAPER; ctx.fillText('SCAN', 72 + mogW + slashW, 118);
+    ctx.font = '500 19px "DM Mono", monospace'; ctx.fillStyle = RED;
+    ctx.textAlign = 'right'; ctx.fillText('THE BLACK CAPSULE', 1008, 114); ctx.textAlign = 'left';
+    ctx.strokeStyle = 'rgba(255,255,255,.14)'; ctx.lineWidth = 1;
+    ctx.beginPath(); ctx.moveTo(72, 150); ctx.lineTo(1008, 150); ctx.stroke();
+    // Optional face photo (contain-fit, hairline framed).
     if (!faceFree && frameCanvasRef.current) {
       const frame = frameCanvasRef.current;
-      // Fit the complete capture using one scale factor for both dimensions.
-      // Filling this wide photo area would crop or distort the square face image.
-      const photo = { x: 72, y: 165, width: 936, height: 600 };
-      const scale = Math.min(photo.width / frame.width, photo.height / frame.height);
-      const width = frame.width * scale;
-      const height = frame.height * scale;
-      context.drawImage(frame, photo.x + (photo.width - width) / 2, photo.y + (photo.height - height) / 2, width, height);
+      const box = { x: 72, y: 186, w: 936, h: 560 };
+      const s = Math.min(box.w / frame.width, box.h / frame.height);
+      const w = frame.width * s; const h = frame.height * s;
+      const px = box.x + (box.w - w) / 2; const py = box.y + (box.h - h) / 2;
+      ctx.drawImage(frame, px, py, w, h);
+      ctx.strokeStyle = 'rgba(255,255,255,.14)'; ctx.lineWidth = 1; ctx.strokeRect(px, py, w, h);
     }
-    const scoreY = faceFree ? 640 : 1000;
-    context.fillStyle = '#ece9e2'; context.font = '900 220px Arial'; context.fillText(String(result.score), 65, scoreY);
-    const scoreWidth = context.measureText(String(result.score)).width;
-    context.fillStyle = '#92908b'; context.font = '500 70px Arial'; context.fillText('/100', 82 + scoreWidth, scoreY);
-    context.fillStyle = '#ee553d'; context.font = '800 40px Arial'; context.fillText(result.tier, 75, scoreY + 65);
-    context.fillStyle = '#ece9e2'; context.font = '700 40px Arial'; context.fillText(resultCopy[result.tier].headline, 75, scoreY + 140, 930);
-    context.fillStyle = '#92908b'; context.font = '22px Arial'; context.fillText('A model estimate. A roast. Not a measure of your worth.', 75, 1265);
-    const link = document.createElement('a'); link.download = 'mog-scan-result.png'; link.href = canvas.toDataURL('image/png'); link.click();
+    // Score + /100 (Barlow Condensed, like the on-screen reveal).
+    const baseY = faceFree ? 560 : 1010;
+    ctx.font = '800 230px "Barlow Condensed", Impact, sans-serif'; ctx.fillStyle = PAPER;
+    ctx.fillText(String(result.score), 68, baseY);
+    const numW = ctx.measureText(String(result.score)).width;
+    ctx.font = '500 66px "Barlow Condensed", Impact, sans-serif'; ctx.fillStyle = '#7d7d75';
+    ctx.fillText('/100', 68 + numW + 14, baseY);
+    // Tier chip.
+    ctx.font = '500 26px "DM Mono", monospace';
+    const tierText = result.tier; const tierW = ctx.measureText(tierText).width;
+    ctx.strokeStyle = 'rgba(238,85,61,.4)'; ctx.lineWidth = 1.5; ctx.strokeRect(72, baseY + 30, tierW + 40, 58);
+    ctx.fillStyle = RED; ctx.fillText(tierText, 92, baseY + 68);
+    // Verdict headline (wrapped, up to two lines).
+    ctx.font = '700 42px "DM Sans", Arial, sans-serif'; ctx.fillStyle = PAPER;
+    const words = resultCopy[result.tier].headline.split(' ');
+    const lines: string[] = []; let line = '';
+    for (const word of words) {
+      const test = line ? `${line} ${word}` : word;
+      if (ctx.measureText(test).width > 936 && line) { lines.push(line); line = word; } else line = test;
+    }
+    if (line) lines.push(line);
+    lines.slice(0, 2).forEach((text, i) => ctx.fillText(text, 72, baseY + 160 + i * 52));
+    // Footer disclaimer.
+    ctx.font = '400 21px "DM Mono", monospace'; ctx.fillStyle = MUTED;
+    ctx.fillText('A model estimate. A roast. Not a measure of your worth.', 72, 1280);
+    return true;
   }, [faceFree, result]);
+
+  const downloadCard = useCallback(async () => {
+    if (!result) return;
+    await ensureCardFonts();
+    const canvas = document.createElement('canvas');
+    if (!renderCard(canvas)) return;
+    const link = document.createElement('a'); link.download = 'mog-scan-result.png'; link.href = canvas.toDataURL('image/png'); link.click();
+  }, [renderCard, result]);
+
+  // Live card preview on the result screen (same renderer as the download, so
+  // what's shown is exactly what saves). Re-renders when the face-free toggle flips.
+  useEffect(() => {
+    if (state !== 'result' || !result) { setCardPreview(null); return; }
+    let cancelled = false;
+    void (async () => {
+      await ensureCardFonts();
+      if (cancelled) return;
+      const canvas = document.createElement('canvas');
+      if (renderCard(canvas)) setCardPreview(canvas.toDataURL('image/png'));
+    })();
+    return () => { cancelled = true; };
+  }, [state, result, faceFree, renderCard]);
 
   const saveToLeaderboard = useCallback(async () => { if (!result) return; const name = normalizeName(displayName); if (name.length < 2 || name.length > 20) { setLeaderboardError('Use 2–20 characters.'); return; } const prior = entries.find((entry) => entry.displayName.toLowerCase() === name.toLowerCase()); if (prior && result.score <= prior.score) { setLeaderboardError('This name already has an equal or higher score.'); return; } if (prior && !window.confirm(`Replace ${prior.score} with ${result.score}?`)) return; const now = new Date().toISOString(); const entry = { id: prior?.id ?? makeScanId(), displayName: name, score: result.score, tier: result.tier, modelVersion: result.modelVersion, createdAt: prior?.createdAt ?? now, updatedAt: now }; try { const photo = await new Promise<Blob | null>((resolve) => frameCanvasRef.current?.toBlob(resolve, 'image/jpeg', .9)); if (!photo) throw new Error(); await saveLeaderboardPhoto(entry.id, photo); const next = rank([...entries.filter((item) => item !== prior), entry]); saveLeaderboard(next); setEntries(next); setSaveOpen(false); setDisplayName(''); } catch { setLeaderboardError('Local save failed.'); } }, [displayName, entries, result]);
 
@@ -790,10 +859,15 @@ function App() {
           <div className="tier"><span className="tier-mark" />{result.tier}</div>
           <h2 className="verdict">{verdict.headline}</h2>
           <p className="verdict-detail">{verdict.detail}</p>
-          <div className="actions"><button className="primary" onClick={scanAgain}>Run it back <span aria-hidden="true">↗</span></button><button className="secondary" onClick={() => setSaveOpen(true)}>Save leaderboard</button><button className="secondary" onClick={downloadCard}>Save the receipt <span aria-hidden="true">↓</span></button></div>
-          <label className="toggle"><input type="checkbox" checked={faceFree} onChange={(event) => setFaceFree(event.target.checked)} /> Keep my face off the card</label>
+          <div className="actions"><button className="primary" onClick={scanAgain}>Run it back <span aria-hidden="true">↗</span></button><button className="secondary" onClick={() => setSaveOpen(true)}>Save leaderboard</button></div>
           <section className="level-up">
             {tierPlaybooks.slice(Math.max(0, tierPlaybooks.findIndex((playbook) => playbook.tier === result.tier) + 1), Math.max(0, tierPlaybooks.findIndex((playbook) => playbook.tier === result.tier) + 2)).map((playbook) => <details key={playbook.tier}><summary>ASCENDING TO {playbook.tier} <span>+</span></summary><p>General style ideas, not an explanation of your score.</p><ol>{playbook.steps.map((step) => <li key={step}>{step}</li>)}</ol></details>)}
+          </section>
+          <section className="receipt-block">
+            <p className="eyebrow">YOUR RECEIPT</p>
+            {cardPreview && <img className="receipt-preview" src={cardPreview} alt="Your MOG / SCAN result card" />}
+            <label className="toggle"><input type="checkbox" checked={faceFree} onChange={(event) => setFaceFree(event.target.checked)} /> Keep my face off the card</label>
+            <button className="secondary" onClick={() => void downloadCard()}>Save the receipt <span aria-hidden="true">↓</span></button>
           </section>
           <p className="result-disclaimer">A model estimate. A roast. Not a measure of your worth.</p>
         </div>}
