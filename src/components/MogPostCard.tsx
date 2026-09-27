@@ -55,6 +55,7 @@ export function MogPostCard({ id, onNavigate, detail = false }: Props) {
     <footer className="mog-card-foot">
       <MogVoteControls post={post} />
       <div className="mog-card-actions">
+        {!detail && <a className="text-button comment-link" href={`#/mogs/${id}`} onClick={(event) => { event.preventDefault(); onNavigate(route); }}>{post.commentCount === 1 ? '1 comment' : `${post.commentCount} comments`}</a>}
         <button type="button" className="text-button" onClick={() => void share()}>Share</button>
         {post.isOwner && !confirming && <button type="button" className="text-button" onClick={() => setConfirming(true)}>Delete</button>}
       </div>

@@ -117,6 +117,8 @@ class Settings:
     session_create_per_hour: int = field(default_factory=lambda: _int("SESSION_CREATE_PER_HOUR", 30))
     posts_per_minute: int = field(default_factory=lambda: _int("POSTS_PER_MINUTE", 5))
     posts_per_day: int = field(default_factory=lambda: _int("POSTS_PER_DAY", 30))
+    comments_per_minute: int = field(default_factory=lambda: _int("COMMENTS_PER_MINUTE", 10))
+    comments_per_day: int = field(default_factory=lambda: _int("COMMENTS_PER_DAY", 200))
     votes_per_minute: int = field(default_factory=lambda: _int("VOTES_PER_MINUTE", 60))
     social_max_body_bytes: int = field(default_factory=lambda: _int("SOCIAL_MAX_BODY_BYTES", 8 * 1024))
     idempotency_retention_s: int = field(default_factory=lambda: _int("IDEMPOTENCY_RETENTION_S", 48 * 3600))

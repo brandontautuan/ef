@@ -43,6 +43,7 @@ def post_payload(post, vote_row, viewer_player_id: Optional[str], api_base: str)
         "viewerVote": int(vote_row["value"]) if vote_row is not None else 0,
         "viewerVoteRevision": int(vote_row["revision"]) if vote_row is not None else 0,
         "isOwner": viewer_player_id is not None and post["owner_player_id"] == viewer_player_id,
+        "commentCount": post["comment_count"],
     }
 
 
@@ -55,6 +56,7 @@ def vote_state(post, vote_row) -> dict:
         "postRevision": post["revision"],
         "viewerVote": int(vote_row["value"]) if vote_row is not None else 0,
         "viewerVoteRevision": int(vote_row["revision"]) if vote_row is not None else 0,
+        "commentCount": post["comment_count"],
     }
 
 

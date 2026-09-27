@@ -77,6 +77,7 @@ function applyState(state: VoteState, forceViewer: boolean) {
   if (state.postRevision >= existing.postRevision) {
     next = { ...next, mogScore: state.mogScore, upCount: state.upCount, downCount: state.downCount, postRevision: state.postRevision };
   }
+  if (typeof state.commentCount === 'number' && state.commentCount !== next.commentCount) next = { ...next, commentCount: state.commentCount };
   if (forceViewer || (!pendingVotes.has(state.postId) && state.viewerVoteRevision >= existing.viewerVoteRevision)) {
     next = { ...next, viewerVote: state.viewerVote, viewerVoteRevision: state.viewerVoteRevision };
   }
@@ -112,6 +113,14 @@ export async function refreshPostStates(ids: string[]) {
   for (let i = 0; i < unique.length; i += 50) {
     try { applyStateItems(await fetchPostStates(unique.slice(i, i + 50))); } catch { /* next focus/poll retries */ }
   }
+}
+
+/** Authoritative comment count returned by a comment create/delete. */
+export function setCommentCount(postId: string, count: number) {
+  const post = posts.get(postId);
+  if (!post || post.commentCount === count) return;
+  posts.set(postId, { ...post, commentCount: count });
+  emit();
 }
 
 export function notifyPublished(post: MogPost) {

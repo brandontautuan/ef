@@ -2,6 +2,9 @@
 
 import { apiRequest } from '../api/client';
 import type {
+  CommentPage,
+  CommentVoteState,
+  MogComment,
   FeedHead,
   FeedKind,
   FeedPage,
@@ -95,3 +98,26 @@ export function submitScanFrame(scanId: string, blob: Blob, sequence: number) {
   // Retrying the same sequence returns the cached acknowledgment, never a second sample.
   return apiRequest<FrameAck>(`/scans/${encodeURIComponent(scanId)}/frames`, { method: 'POST', form, timeoutMs: 8_000, retries: 1 });
 }
+
+// ---- Comments -------------------------------------------------------------------
+
+export const fetchComments = (postId: string, cursor: string | null = null, limit = 20) =>
+  apiRequest<CommentPage>(`/posts/${encodeURIComponent(postId)}/comments${query({ cursor, limit })}`, { retries: 2 });
+
+export const createComment = (postId: string, body: string, idempotencyKey: string) =>
+  apiRequest<{ comment: MogComment; created: boolean; commentCount: number }>(`/posts/${encodeURIComponent(postId)}/comments`, {
+    method: 'POST',
+    body: { body },
+    idempotencyKey,
+    retries: 2, // same key + same body: a retry returns the same comment
+  });
+
+export const putCommentVote = (commentId: string, value: VoteValue, expectedVoteRevision: number) =>
+  apiRequest<CommentVoteState>(`/comments/${encodeURIComponent(commentId)}/vote`, {
+    method: 'PUT',
+    body: { value, expected_vote_revision: expectedVoteRevision },
+    retries: 1,
+  });
+
+export const deleteComment = (commentId: string) =>
+  apiRequest<{ commentCount: number }>(`/comments/${encodeURIComponent(commentId)}`, { method: 'DELETE', retries: 1 });

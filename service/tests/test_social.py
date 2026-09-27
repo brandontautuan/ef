@@ -65,7 +65,7 @@ def test_public_representation_hides_internal_ids(author):
     assert player_id_of(author) not in text
     assert set(post) == {
         "id", "feedSeq", "createdAt", "authorLabel", "caption", "result", "mediaUrl", "mogScore", "upCount",
-        "downCount", "postRevision", "viewerVote", "viewerVoteRevision", "isOwner",
+        "downCount", "postRevision", "viewerVote", "viewerVoteRevision", "isOwner", "commentCount",
     }
 
 

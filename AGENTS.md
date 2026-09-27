@@ -289,3 +289,23 @@ plan's database, sessions, or server results existed yet.
   share URL, and no horizontal overflow at 320/390px. The upload scan → save →
   share flow ran with a stubbed MediaPipe module (CDN blocked in that sandbox).
   Real-camera scans, Safari/iOS cookies, and the live Space proxy are untested.
+
+### Comments (added after the social release)
+
+- Migration `0003_comments.sql` adds `social_comments`, `social_comment_votes`,
+  and `social_posts.comment_count`. Logic lives in `service/app/social/comments.py`;
+  routes are `GET/POST /v1/social/posts/{id}/comments`,
+  `PUT /v1/social/comments/{id}/vote`, `DELETE /v1/social/comments/{id}`.
+- Each comment has its own Up Mog / Down Mog counter with the same rules as
+  posts: desired-state votes, per-player revisions, the author's automatic +1,
+  and no effect on the post's count (or vice versa).
+- Plain text, 1-500 code points, `Idempotency-Key` required, oldest first,
+  10/min and 200/day per player. The author label is the commenter's
+  leaderboard name or "Anonymous"; the post owner's comments get an OP badge.
+  Only a comment's author can delete it (post owners can't moderate yet).
+  Deleting a post tombstones its comments and removes their votes.
+- Client: `src/social/useCommentStore.ts`, `src/components/MogComments.tsx`,
+  and the shared presentational `VoteButtons.tsx`. Comments appear on the
+  post detail page; cards show a comment count link.
+- Verified: 105 pytest tests (22 comment tests) and a two-browser Playwright
+  run at 320px. The three new routes must be added to the Space proxies.

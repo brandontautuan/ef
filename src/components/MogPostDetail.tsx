@@ -2,7 +2,8 @@ import { useEffect, useState } from 'react';
 import { ApiError } from '../api/client';
 import { fetchPost } from '../social/api';
 import type { AppRoute } from '../social/useAppRoute';
-import { markDeleted, upsertPosts, usePostMeta, useViewerEpoch } from '../social/useSocialStore';
+import { markDeleted, upsertPosts, usePost, usePostMeta, useViewerEpoch } from '../social/useSocialStore';
+import { MogComments } from './MogComments';
 import { MogPostCard } from './MogPostCard';
 
 type Props = { id: string; onNavigate: (route: AppRoute) => void };
@@ -10,6 +11,7 @@ type Props = { id: string; onNavigate: (route: AppRoute) => void };
 export function MogPostDetail({ id, onNavigate }: Props) {
   const epoch = useViewerEpoch();
   const { deleted } = usePostMeta(id);
+  const post = usePost(id);
   const [status, setStatus] = useState<'loading' | 'ready' | 'deleted' | 'missing' | 'error'>('loading');
   const [message, setMessage] = useState('');
   const [refreshToken, setRefreshToken] = useState(0);
@@ -40,5 +42,5 @@ export function MogPostDetail({ id, onNavigate }: Props) {
   if (status === 'missing') return <div className="mog-detail">{back}<div className="feed-status"><h2>Mog not found.</h2><p>Check the link, or browse the latest mogs.</p></div></div>;
   if (status === 'error') return <div className="mog-detail">{back}<div className="feed-status error"><p role="alert">{message}</p></div></div>;
   if (status === 'loading') return <div className="mog-detail">{back}<p className="feed-status" role="status">Loading mog…</p></div>;
-  return <div className="mog-detail">{back}<MogPostCard id={id} onNavigate={onNavigate} detail /></div>;
+  return <div className="mog-detail">{back}<MogPostCard id={id} onNavigate={onNavigate} detail /><MogComments postId={id} count={post?.commentCount ?? 0} /></div>;
 }

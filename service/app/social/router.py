@@ -18,8 +18,16 @@ from ..db import now_ms
 from ..errors import app_error, bad_request, rate_limited_for
 from ..http_utils import check_mutation_origin, parse_limit, read_json_model, request_id
 from ..sessions import require_viewer, resolve_viewer
-from . import media, repository as repo, service
-from .schemas import IDEMPOTENCY_KEY_RE, PublishRequest, StateRequest, VoteRequest, validate_post_id
+from . import comments, media, repository as repo, service
+from .schemas import (
+    IDEMPOTENCY_KEY_RE,
+    CommentRequest,
+    PublishRequest,
+    StateRequest,
+    VoteRequest,
+    validate_comment_id,
+    validate_post_id,
+)
 
 router = APIRouter(prefix="/v1/social")
 
@@ -171,3 +179,63 @@ async def post_media(request: Request, post_id: str) -> Response:
         raise app_error(404, "media_not_found", "This mog has no photo.")
     path, mime = found
     return FileResponse(path, media_type=mime, headers={"Cache-Control": "private, no-store"})
+
+
+# ---- Comments ----------------------------------------------------------------
+
+@router.get("/posts/{post_id}/comments")
+async def list_comments(request: Request, post_id: str, cursor: Optional[str] = None, limit: Optional[int] = None) -> JSONResponse:
+    validate_post_id(post_id)
+    page = comments.list_comments(
+        _db(request), post_id=post_id, cursor=cursor, limit=parse_limit(limit, PAGE_DEFAULT, PAGE_MAX),
+        viewer_player_id=_viewer_id(request),
+    )
+    return _json(request, page)
+
+
+@router.post("/posts/{post_id}/comments")
+async def create_comment(request: Request, post_id: str) -> JSONResponse:
+    check_mutation_origin(request)
+    viewer = require_viewer(request)
+    validate_post_id(post_id)
+    key = request.headers.get("idempotency-key", "")
+    if not IDEMPOTENCY_KEY_RE.match(key):
+        raise bad_request("Send an Idempotency-Key header (8-128 URL-safe characters).")
+    body = await read_json_model(request, CommentRequest)
+    db = _db(request)
+    with db.read() as conn:
+        is_retry = repo.get_dedup(conn, viewer.player_id, comments.CREATE_OPERATION, key, now_ms()) is not None
+    if not is_retry:
+        if comments.comments_created_since(db, viewer.player_id, now_ms() - DAY_MS) >= settings.comments_per_day:
+            raise rate_limited_for(3600, "You've hit today's comment limit. Try again later.")
+        if not request.app.state.comment_limiter.allow(viewer.player_id):
+            raise rate_limited_for(60, "You're commenting too fast. Wait a minute and try again.")
+    payload, created, count = comments.create_comment(
+        db, post_id=post_id, player_id=viewer.player_id, idempotency_key=key, raw_body=body.body,
+        retention_ms=settings.idempotency_retention_s * 1000,
+    )
+    return _json(request, {"comment": payload, "created": created, "commentCount": count}, status_code=201 if created else 200)
+
+
+@router.put("/comments/{comment_id}/vote")
+async def comment_vote(request: Request, comment_id: str) -> JSONResponse:
+    check_mutation_origin(request)
+    viewer = require_viewer(request)
+    validate_comment_id(comment_id)
+    body = await read_json_model(request, VoteRequest)
+    if not request.app.state.vote_limiter.allow(viewer.player_id):  # shared with post votes
+        raise rate_limited_for(30, "You're voting too fast. Slow down a little.")
+    state = comments.set_comment_vote(
+        _db(request), comment_id=comment_id, player_id=viewer.player_id, value=body.value,
+        expected_revision=body.expected_vote_revision,
+    )
+    return _json(request, state)
+
+
+@router.delete("/comments/{comment_id}")
+async def delete_comment(request: Request, comment_id: str) -> JSONResponse:
+    check_mutation_origin(request)
+    viewer = require_viewer(request)
+    validate_comment_id(comment_id)
+    count = comments.delete_comment(_db(request), comment_id=comment_id, player_id=viewer.player_id)
+    return _json(request, {"commentCount": count})

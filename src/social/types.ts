@@ -26,6 +26,7 @@ export type MogPost = {
   viewerVote: VoteValue;
   viewerVoteRevision: number;
   isOwner: boolean;
+  commentCount: number;
 };
 
 export type VoteState = {
@@ -36,6 +37,7 @@ export type VoteState = {
   postRevision: number;
   viewerVote: VoteValue;
   viewerVoteRevision: number;
+  commentCount?: number;
 };
 
 export type PostStateItem = ({ status: 'active' } & VoteState) | { status: 'deleted' | 'missing'; postId: string };
@@ -94,3 +96,32 @@ export type LeaderboardPage = {
 };
 
 export type LeaderboardSubmit = { outcome: 'inserted' | 'replaced' | 'unchanged' | 'not_higher'; entry: LeaderboardRow };
+
+export type MogComment = {
+  id: string;
+  postId: string;
+  seq: number;
+  createdAt: string;
+  authorLabel: string;
+  body: string;
+  isPostAuthor: boolean;
+  mogScore: number;
+  upCount: number;
+  downCount: number;
+  commentRevision: number;
+  viewerVote: VoteValue;
+  viewerVoteRevision: number;
+  isAuthor: boolean;
+};
+
+export type CommentVoteState = {
+  commentId: string;
+  mogScore: number;
+  upCount: number;
+  downCount: number;
+  commentRevision: number;
+  viewerVote: VoteValue;
+  viewerVoteRevision: number;
+};
+
+export type CommentPage = { items: MogComment[]; nextCursor: string | null; commentCount: number };

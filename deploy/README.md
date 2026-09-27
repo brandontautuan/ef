@@ -27,6 +27,9 @@ Use Hono `/:param` syntax. Declare the fixed `head` and `state` paths before
 | `/api/mog/me/posts` | GET | `/v1/social/me/posts` |
 | `/api/mog/me/upmogs` | GET | `/v1/social/me/upmogs` |
 | `/api/mog/me/shareable-results` | GET | `/v1/social/me/shareable-results` |
+| `/api/mog/posts/:id/comments` | GET, POST | `/v1/social/posts/:id/comments` |
+| `/api/mog/comments/:id` | DELETE | `/v1/social/comments/:id` |
+| `/api/mog/comments/:id/vote` | PUT | `/v1/social/comments/:id/vote` |
 
 Each proxy must:
 
@@ -76,7 +79,7 @@ Nothing else on the homepage changes.
 ```sh
 cd service
 python -m app.manage backup data/backups/mog-$(date +%Y%m%d).sqlite3
-python -m app.manage reconcile-votes   # recompute counters from vote rows
+python -m app.manage reconcile-votes   # recompute post/comment counters from vote rows
 python -m app.manage cleanup-media     # also runs automatically every 5 minutes
 ```
 

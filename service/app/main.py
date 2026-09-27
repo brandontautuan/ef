@@ -62,7 +62,7 @@ def run_maintenance(app: FastAPI) -> dict:
         dedup_removed = conn.execute("DELETE FROM request_deduplication WHERE expires_at <= ?", (now,)).rowcount
     media_removed = social_media.cleanup(db, app.state.post_media_dir, now)
     app.state.scans.sweep()
-    for limiter in (app.state.rate_limiter, app.state.session_create_limiter, app.state.post_limiter, app.state.vote_limiter):
+    for limiter in (app.state.rate_limiter, app.state.session_create_limiter, app.state.post_limiter, app.state.vote_limiter, app.state.comment_limiter):
         limiter.sweep()
     return {"sessions": sessions_removed, "dedup": dedup_removed, "media": media_removed}
 
@@ -98,6 +98,7 @@ async def lifespan(app: FastAPI):
     app.state.session_create_limiter = RateLimiter(settings.session_create_per_hour, 3600.0)
     app.state.post_limiter = RateLimiter(settings.posts_per_minute, 60.0)
     app.state.vote_limiter = RateLimiter(settings.votes_per_minute, 60.0)
+    app.state.comment_limiter = RateLimiter(settings.comments_per_minute, 60.0)
     maintenance = asyncio.create_task(_maintenance_loop(app))
     try:
         yield

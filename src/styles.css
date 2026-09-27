@@ -391,3 +391,30 @@ footer { display: flex; justify-content: space-between; gap: 15px; padding-top: 
   *, *::before, *::after { animation-duration: .01ms !important; animation-delay: 0ms !important; transition-duration: .01ms !important; animation-iteration-count: 1 !important; }
   .micro-capsule, .scanline { display: none; }
 }
+
+/* ---- Comments (each with its own Up Mog / Down Mog counter) ---- */
+.visually-hidden { position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap; }
+.comment-link { text-decoration: none; }
+.comment-link:hover { text-decoration: underline; }
+.mog-comments { margin-top: 22px; border-top: 1px solid var(--line); padding-top: 20px; }
+.mog-comments > h2 { margin: 0 0 14px; font: 800 30px/1 'Barlow Condensed', Impact, sans-serif; text-transform: uppercase; letter-spacing: -.01em; }
+.comment-composer { margin-bottom: 18px; }
+.comment-composer .caption-field { margin-bottom: 8px; }
+.comment-composer .caption-field textarea { min-height: 64px; }
+.comment-composer-actions { display: flex; justify-content: space-between; align-items: center; gap: 12px; }
+.comment-composer-actions .share-fineprint { margin: 0; }
+.comment-composer-actions .primary { min-height: 42px; padding: 10px 20px; flex: none; }
+.mog-comment-list { list-style: none; margin: 0; padding: 0; }
+.mog-comment { border-top: 1px solid #1f1f1d; padding: 12px 0 10px; }
+.mog-comment-head { display: flex; flex-wrap: wrap; align-items: baseline; gap: 0 6px; font: 11px var(--mono); color: #92918c; }
+.mog-comment-head b { color: var(--paper); font-weight: 500; overflow-wrap: anywhere; }
+.mog-comment-head .mog-owner-tag { margin-left: auto; }
+.op-tag { color: var(--red); border: 1px solid #ee553d66; padding: 1px 5px; font-size: 9px; letter-spacing: .1em; }
+.mog-comment-body { margin: 8px 0 8px; font-size: 14px; line-height: 1.5; white-space: pre-wrap; overflow-wrap: anywhere; color: #dedbd3; }
+.mog-comment-foot { display: flex; align-items: center; justify-content: space-between; gap: 10px; }
+.mog-votes.compact .vote-button { min-height: 32px; min-width: 36px; padding: 6px 10px; justify-content: center; }
+.mog-votes.compact .mog-count { min-width: 56px; font-size: 15px; }
+@media (max-width: 600px) {
+  .comment-composer-actions { flex-direction: column; align-items: stretch; }
+  .comment-composer-actions .primary { width: 100%; justify-content: center; }
+}

@@ -36,6 +36,11 @@ class VoteRequest(BaseModel):
         return v
 
 
+class CommentRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid", strict=True)
+    body: str = Field(min_length=1, max_length=8000)
+
+
 class StateRequest(BaseModel):
     model_config = ConfigDict(extra="forbid", strict=True)
     ids: list[str] = Field(max_length=50)
@@ -61,6 +66,12 @@ def normalize_caption(raw: Optional[str]) -> Optional[str]:
     if len(text) > CAPTION_MAX_CODE_POINTS:
         raise app_error(400, "invalid_caption", f"Captions are limited to {CAPTION_MAX_CODE_POINTS} characters.")
     return text
+
+
+def validate_comment_id(comment_id: str) -> str:
+    if not POST_ID_RE.match(comment_id):
+        raise app_error(404, "comment_not_found", "That comment does not exist.")
+    return comment_id
 
 
 def validate_post_id(post_id: str) -> str:

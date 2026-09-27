@@ -6,10 +6,11 @@ import react from '@vitejs/plugin-react';
 // the anonymous session cookie is first-party in development too.
 //   /api/mog/posts...  -> /v1/social/posts...
 //   /api/mog/me/...    -> /v1/social/me/...
+//   /api/mog/comments/... -> /v1/social/comments/...
 //   /api/mog/<other>   -> /v1/<other>   (session, scans, leaderboard)
 export function rewriteMogApiPath(path: string) {
   return path
-    .replace(/^\/api\/mog\/(posts|me)(?=\/|\?|$)/, '/v1/social/$1')
+    .replace(/^\/api\/mog\/(posts|me|comments)(?=\/|\?|$)/, '/v1/social/$1')
     .replace(/^\/api\/mog(?=\/|\?|$)/, '/v1');
 }
 

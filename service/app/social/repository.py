@@ -167,12 +167,24 @@ def posts_created_since(conn: sqlite3.Connection, owner_player_id: str, since: i
 
 
 def tombstone(conn: sqlite3.Connection, post_id: str, now: int) -> None:
-    """Keep only ID, source result, owner, feed sequence, and deletion time."""
+    """Keep only ID, source result, owner, feed sequence, and deletion time.
+
+    Deleting a post also removes its comments (tombstoned) and all comment votes.
+    """
     conn.execute("DELETE FROM social_votes WHERE post_id = ?", (post_id,))
+    conn.execute(
+        "DELETE FROM social_comment_votes WHERE comment_id IN (SELECT id FROM social_comments WHERE post_id = ?)",
+        (post_id,),
+    )
+    conn.execute(
+        "UPDATE social_comments SET deleted_at = COALESCE(deleted_at, ?), body = NULL, author_label = NULL, "
+        "up_count = 0, down_count = 0, mog_score = 0, revision = revision + 1 WHERE post_id = ?",
+        (now, post_id),
+    )
     conn.execute(
         "UPDATE social_posts SET deleted_at = ?, caption = NULL, media_id = NULL, author_label = NULL, scan_score = NULL, "
         "tier = NULL, model_version = NULL, display_map_version = NULL, capture_mode = NULL, result_created_at = NULL, "
-        "up_count = 0, down_count = 0, mog_score = 0, revision = revision + 1 WHERE id = ?",
+        "up_count = 0, down_count = 0, mog_score = 0, comment_count = 0, revision = revision + 1 WHERE id = ?",
         (now, post_id),
     )
 
