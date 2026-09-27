@@ -7,14 +7,28 @@ import { resultCopy } from './resultCopy';
 import { clearLeaderboard, loadLeaderboard, normalizeName, rank, saveLeaderboard, type LeaderboardEntry } from './leaderboard';
 import { clearLeaderboardPhotos, deleteLeaderboardPhoto, loadLeaderboardPhoto, saveLeaderboardPhoto } from './leaderboardPhotos';
 import type { EditFace } from './mogTimeline';
+import { ApiError, apiEnabled } from './api/client';
+import { ensureSession, refreshSession, useSession } from './api/session';
+import { createScan, submitLeaderboard, submitScanFrame, type RegisteredScan } from './social/api';
+import type { LeaderboardRow, ServerScanResult } from './social/types';
+import { useAppRoute } from './social/useAppRoute';
+import { MogFeed } from './components/MogFeed';
+import { MogPostDetail } from './components/MogPostDetail';
+import { MyMogs } from './components/MyMogs';
+import { SharedLeaderboard } from './components/SharedLeaderboard';
+import { ShareMogSheet, type ShareSource } from './components/ShareMogSheet';
 import './styles.css';
 
 type ScanState = 'idle' | 'permission' | 'acquiring' | 'sampling' | 'paused' | 'analyzing' | 'result' | 'error';
 type Landmark = { x: number; y: number; z: number };
 type QualityFailure = 'no_face' | 'multiple_faces' | 'too_small' | 'cut_off' | 'pose' | 'dark' | 'blur' | 'motion';
 type QualityAssessment = { eligible: boolean; failures: QualityFailure[] };
-type Prediction = { nativeScore: number; modelVersion: string; sequence: number };
-type ScanResult = { score: number; tier: string; modelVersion: string; nativeScores: number[]; medianNativeScore: number };
+type CaptureMode = 'live' | 'upload';
+// With the shared API enabled, frames go to an owned, registered scan and the
+// service computes the result; `serverResult` arrives with the final frame.
+type Prediction = { nativeScore: number; modelVersion: string; sequence: number; acceptedFrames?: number; serverResult?: ServerScanResult };
+type ScanResult = { score: number; tier: string; modelVersion: string; nativeScores: number[]; medianNativeScore: number; captureMode: CaptureMode; serverResultId?: string };
+type SharedSave = { entry: LeaderboardRow; outcome: 'inserted' | 'replaced' | 'unchanged' | 'not_higher' } | null;
 type LocalDuel = { phase: 'first' | 'handoff' | 'second' | 'editing'; first?: EditFace; second?: EditFace };
 
 const SCAN_TIMEOUT_MS = 28_000;
@@ -215,6 +229,24 @@ async function scoreFrame(canvas: HTMLCanvasElement, scanId: string, sequence: n
   }
 }
 
+// Registered-scan path: same selected crop, but the service records the result.
+async function scoreRegisteredFrame(canvas: HTMLCanvasElement, scan: RegisteredScan, sequence: number): Promise<Prediction> {
+  const blob = await new Promise<Blob | null>((resolve) => canvas.toBlob(resolve, 'image/jpeg', 0.88));
+  if (!blob) throw new Error('Could not prepare selected frame.');
+  const ack = await submitScanFrame(scan.scan_id, blob, sequence);
+  return { nativeScore: ack.native_score ?? Number.NaN, modelVersion: ack.model_version, sequence, acceptedFrames: ack.accepted_frames, serverResult: ack.result ?? undefined };
+}
+
+// Registration runs concurrently with the camera start; null means the legacy
+// (unrecorded, local-only) scoring path is used for this scan.
+function registerScan(mode: CaptureMode): Promise<RegisteredScan | null> | null {
+  if (!apiEnabled) return null;
+  return ensureSession().then(() => createScan(mode)).catch((error) => {
+    scanDebug('scan_registration_failed', { code: error instanceof ApiError ? error.code : 'unknown' });
+    return null;
+  });
+}
+
 function App() {
   const videoRef = useRef<HTMLVideoElement>(null);
   const frameCanvasRef = useRef<HTMLCanvasElement>(null);
@@ -236,6 +268,7 @@ function App() {
   const editUrlsRef = useRef<string[]>([]);
   const duelUrlsRef = useRef<string[]>([]);
   const duelRef = useRef<LocalDuel | null>(null);
+  const registeredScanRef = useRef<Promise<RegisteredScan | null> | null>(null);
   const previousFaceCenterRef = useRef<{ x: number; y: number; at: number } | null>(null);
   const validSinceRef = useRef<number | null>(null);
   const [state, setState] = useState<ScanState>('idle');
@@ -250,6 +283,17 @@ function App() {
   const [leaderboardOpen, setLeaderboardOpen] = useState(false); const [saveOpen, setSaveOpen] = useState(false); const [displayName, setDisplayName] = useState(''); const [entries, setEntries] = useState<LeaderboardEntry[]>(() => loadLeaderboard()); const [leaderboardError, setLeaderboardError] = useState('');
   const [editOpen, setEditOpen] = useState(false); const [editLoading, setEditLoading] = useState(false); const [editFaces, setEditFaces] = useState<EditFace[]>([]);
   const [duel, setDuel] = useState<LocalDuel | null>(null);
+  const { route, navigate } = useAppRoute();
+  const session = useSession();
+  const [leaderboardTab, setLeaderboardTab] = useState<'shared' | 'local'>(apiEnabled ? 'shared' : 'local');
+  const [sharedSave, setSharedSave] = useState<SharedSave>(null);
+  const [confirmReplace, setConfirmReplace] = useState<{ currentScore: number; newScore: number } | null>(null);
+  const [keepLocal, setKeepLocal] = useState(true);
+  const [saving, setSaving] = useState(false);
+  const [shareSource, setShareSource] = useState<ShareSource | null>(null);
+  const socialRoute = apiEnabled && route.name !== 'home';
+
+  useEffect(() => { if (apiEnabled) void refreshSession().catch(() => undefined); }, []);
 
   useEffect(() => { stateRef.current = state; }, [state]);
   useEffect(() => { duelRef.current = duel; }, [duel]);
@@ -285,8 +329,11 @@ function App() {
     requestInFlight.current = false;
     validSinceRef.current = null;
     previousFaceCenterRef.current = null;
+    registeredScanRef.current = null;
     setProgress(0);
     setResult(null);
+    setSharedSave(null);
+    setConfirmReplace(null);
   }, [clearScanTimers]);
 
   useEffect(() => () => { activeScanId.current = makeScanId(); clearScanTimers(); stopTracking(); stopCamera(); }, [clearScanTimers, stopCamera, stopTracking]);
@@ -427,9 +474,9 @@ function App() {
     return true;
   }, [clearScanTimers, stopCamera, stopTracking]);
 
-  const finish = useCallback((items: Prediction[]) => {
+  const finish = useCallback((items: Prediction[], captureMode: CaptureMode, serverResult?: ServerScanResult) => {
     clearScanTimers();
-    const modelVersion = items[0].modelVersion;
+    const modelVersion = serverResult?.modelVersion ?? items[0].modelVersion;
     if (items.some((item) => item.modelVersion !== modelVersion)) {
       setState('error');
       setMessage('The model changed during this scan. Please scan again.');
@@ -437,7 +484,8 @@ function App() {
     }
     const nativeScores = items.map((item) => item.nativeScore);
     const medianNativeScore = median(nativeScores);
-    const score = displayScore(medianNativeScore);
+    // A registered scan's score and tier come from the service, never the browser.
+    const score = serverResult?.score ?? displayScore(medianNativeScore);
     scanDebug('result_locked', {
       frames: items.length,
       nativeScores: nativeScores.map((value) => Number(value.toFixed(3))),
@@ -445,10 +493,11 @@ function App() {
       medianNativeScore: Number(medianNativeScore.toFixed(3)),
       displayFormula: 'clamp(round(((native - 2.4) / 1.6) * 100), 0, 100)',
       displayScore: score,
-      tier: tierFor(score),
+      tier: serverResult?.tier ?? tierFor(score),
       modelVersion,
+      serverResultId: serverResult?.id ?? null,
     });
-    const scanResult = { score, tier: tierFor(score), modelVersion, nativeScores, medianNativeScore };
+    const scanResult: ScanResult = { score, tier: serverResult?.tier ?? tierFor(score), modelVersion, nativeScores, medianNativeScore, captureMode, serverResultId: serverResult?.id };
     if (lockDuelResult(scanResult)) return;
     setResult(scanResult);
     setState('result');
@@ -488,10 +537,21 @@ function App() {
     const scanId = activeScanId.current;
     const frameSequence = ++sequence.current;
     try {
-      const prediction = await scoreFrame(frameCanvasRef.current!, scanId, frameSequence);
+      const registered = registeredScanRef.current ? await registeredScanRef.current : null;
+      if (scanId !== activeScanId.current) return;
+      const prediction = registered
+        ? await scoreRegisteredFrame(frameCanvasRef.current!, registered, frameSequence)
+        : await scoreFrame(frameCanvasRef.current!, scanId, frameSequence);
       if (scanId !== activeScanId.current || (stateRef.current !== 'sampling' && stateRef.current !== 'paused')) return;
       const next = [...predictions.current, prediction];
       predictions.current = next;
+      if (registered) {
+        const accepted = prediction.acceptedFrames ?? next.length;
+        setProgress(Math.round((accepted / REQUIRED_PREDICTIONS) * 100));
+        setMessage(accepted === REQUIRED_PREDICTIONS - 1 ? 'One more frame…' : 'Hold that pose…');
+        if (prediction.serverResult) finish(next, 'live', prediction.serverResult);
+        return;
+      }
       scanDebug('frame_scored', {
         scanId,
         frameSequence,
@@ -502,7 +562,7 @@ function App() {
       });
       setProgress(Math.round((next.length / REQUIRED_PREDICTIONS) * 100));
       setMessage(next.length === REQUIRED_PREDICTIONS - 1 ? 'One more frame…' : 'Hold that pose…');
-      if (next.length >= REQUIRED_PREDICTIONS) finish(next);
+      if (next.length >= REQUIRED_PREDICTIONS) finish(next, 'live');
     } catch (error) {
       scanDebug('score_error', { scanId, frameSequence, message: error instanceof Error ? error.message : 'Unknown error' });
       if (scanId === activeScanId.current) {
@@ -568,6 +628,8 @@ function App() {
     }
     stopTracking(); stopCamera(); resetScan();
     const scanId = activeScanId.current;
+    // Match/duel scans stay local; solo scans register with the service concurrently.
+    registeredScanRef.current = duelRef.current ? null : registerScan('live');
     setIntroSequence((value) => value + 1);
     setIntroPlaying(true);
     stateRef.current = 'permission'; setState('permission');
@@ -628,6 +690,7 @@ function App() {
   const scanImage = useCallback(async (file: File) => {
     stopTracking(); stopCamera(); resetScan();
     const scanId = activeScanId.current;
+    registeredScanRef.current = registerScan('upload');
     stateRef.current = 'analyzing'; setState('analyzing');
     setMessage('Reading your photo…');
     let objectUrl: string | null = null;
@@ -658,10 +721,14 @@ function App() {
       }
       setMessage('Scoring your photo…');
       requestInFlight.current = true;
-      const prediction = await scoreFrame(frameCanvasRef.current!, scanId, ++sequence.current);
+      const registered = registeredScanRef.current ? await registeredScanRef.current : null;
+      if (scanId !== activeScanId.current) return;
+      const prediction = registered
+        ? await scoreRegisteredFrame(frameCanvasRef.current!, registered, ++sequence.current)
+        : await scoreFrame(frameCanvasRef.current!, scanId, ++sequence.current);
       if (scanId !== activeScanId.current) return;
       scanDebug('upload_scored', { scanId, nativeScore: Number(prediction.nativeScore.toFixed(3)), modelVersion: prediction.modelVersion });
-      finish([prediction]);
+      finish([prediction], 'upload', prediction.serverResult);
     } catch (error) {
       scanDebug('upload_error', { scanId, message: error instanceof Error ? error.message : 'Unknown error' });
       if (scanId === activeScanId.current) {
@@ -675,12 +742,14 @@ function App() {
     }
   }, [finish, resetScan, stopCamera, stopTracking]);
 
+  const exitScanRef = useRef<() => void>(() => undefined);
   const scanAgain = useCallback(() => { stopTracking(); stopCamera(); void startCamera(); }, [startCamera, stopCamera, stopTracking]);
   const exitScan = useCallback(() => {
     setIntroPlaying(false);
     activeScanId.current = makeScanId();
     clearDuel(); clearScanTimers(); stopTracking(); stopCamera(); stateRef.current = 'idle'; setState('idle'); setMessage('Camera stays off until you start.'); setProgress(0); setResult(null);
   }, [clearDuel, clearScanTimers, stopCamera, stopTracking]);
+  exitScanRef.current = exitScan;
 
   // Render the shareable "receipt" card, matched to the site theme (matte black,
   // Barlow Condensed score, DM Mono labels, red accents, hairline border). Used by
@@ -765,7 +834,62 @@ function App() {
     return () => { cancelled = true; };
   }, [state, result, faceFree, renderCard]);
 
-  const saveToLeaderboard = useCallback(async () => { if (!result) return; const name = normalizeName(displayName); if (name.length < 2 || name.length > 20) { setLeaderboardError('Use 2–20 characters.'); return; } const prior = entries.find((entry) => entry.displayName.toLowerCase() === name.toLowerCase()); if (prior && result.score <= prior.score) { setLeaderboardError('This name already has an equal or higher score.'); return; } if (prior && !window.confirm(`Replace ${prior.score} with ${result.score}?`)) return; const now = new Date().toISOString(); const entry = { id: prior?.id ?? makeScanId(), displayName: name, score: result.score, tier: result.tier, modelVersion: result.modelVersion, createdAt: prior?.createdAt ?? now, updatedAt: now }; try { const photo = await new Promise<Blob | null>((resolve) => frameCanvasRef.current?.toBlob(resolve, 'image/jpeg', .9)); if (!photo) throw new Error(); await saveLeaderboardPhoto(entry.id, photo); const next = rank([...entries.filter((item) => item !== prior), entry]); saveLeaderboard(next); setEntries(next); setSaveOpen(false); setDisplayName(''); } catch { setLeaderboardError('Local save failed.'); } }, [displayName, entries, result]);
+  const saveLocal = useCallback(async (name: string): Promise<string | null> => {
+    if (!result) return 'Nothing to save.';
+    const prior = entries.find((entry) => entry.displayName.toLowerCase() === name.toLowerCase());
+    if (prior && result.score <= prior.score) return 'This name already has an equal or higher score on this device.';
+    if (prior && !window.confirm(`Replace ${prior.score} with ${result.score} on this device?`)) return 'Kept your existing score on this device.';
+    const now = new Date().toISOString();
+    const entry = { id: prior?.id ?? makeScanId(), displayName: name, score: result.score, tier: result.tier, modelVersion: result.modelVersion, createdAt: prior?.createdAt ?? now, updatedAt: now };
+    try {
+      const photo = await new Promise<Blob | null>((resolve) => frameCanvasRef.current?.toBlob(resolve, 'image/jpeg', .9));
+      if (!photo) throw new Error();
+      await saveLeaderboardPhoto(entry.id, photo);
+      const next = rank([...entries.filter((item) => item !== prior), entry]);
+      saveLeaderboard(next); setEntries(next);
+      return null;
+    } catch { return 'Local save failed.'; }
+  }, [entries, result]);
+
+  // Shared save sends only the server result ID; the service decides insert,
+  // higher-score replacement (after confirmation), or unchanged.
+  const saveToLeaderboard = useCallback(async (replace = false) => {
+    if (!result) return;
+    const name = normalizeName(displayName);
+    if (name.length < 2 || name.length > 20) { setLeaderboardError('Use 2–20 characters.'); return; }
+    setLeaderboardError('');
+    if (!apiEnabled || !result.serverResultId) {
+      const error = await saveLocal(name);
+      if (error) setLeaderboardError(error); else { setSaveOpen(false); setDisplayName(''); }
+      return;
+    }
+    setSaving(true);
+    try {
+      await ensureSession();
+      const saved = await submitLeaderboard(result.serverResultId, name, replace);
+      setConfirmReplace(null);
+      setSharedSave(saved);
+      if (keepLocal) { const localError = await saveLocal(name); if (localError) setLeaderboardError(localError); }
+    } catch (error) {
+      if (error instanceof ApiError && error.code === 'replace_confirmation_required' && error.details) setConfirmReplace(error.details as { currentScore: number; newScore: number });
+      else setLeaderboardError(error instanceof ApiError ? error.message : 'Save failed. Try again.');
+    } finally {
+      setSaving(false);
+    }
+  }, [displayName, keepLocal, result, saveLocal]);
+
+  const openShareForResult = useCallback(() => {
+    if (!result?.serverResultId || !sharedSave) return;
+    setShareSource({ resultId: result.serverResultId, displayName: sharedSave.entry.displayName, score: result.score, tier: result.tier, captureMode: result.captureMode, photoAvailable: false });
+  }, [result, sharedSave]);
+
+  // Navigating to a social route stops any camera/tracker work and the edit's
+  // audio. A finished result stays in memory so Back returns to it.
+  useEffect(() => {
+    if (route.name === 'home') return;
+    if (['permission', 'acquiring', 'sampling', 'paused', 'analyzing'].includes(stateRef.current) || duelRef.current) exitScanRef.current();
+    setEditOpen(false); setLeaderboardOpen(false); setSaveOpen(false);
+  }, [route]);
 
   const openMogEdit = useCallback(async () => {
     editUrlsRef.current.forEach((url) => URL.revokeObjectURL(url));
@@ -795,16 +919,31 @@ function App() {
   const tracking = state === 'acquiring' || state === 'sampling' || state === 'paused';
   const framesDone = Math.round((progress / 100) * REQUIRED_PREDICTIONS);
   const verdict = result ? resultCopy[result.tier] : null;
+  // Only a result the service accepted onto the shared board (a publication) is shareable.
+  const canShareResult = Boolean(apiEnabled && result?.serverResultId && sharedSave && sharedSave.entry.resultId === result.serverResultId && (sharedSave.outcome === 'inserted' || sharedSave.outcome === 'replaced' || sharedSave.outcome === 'unchanged') && !sharedSave.entry.postStatus);
   const duelFaces = duel?.phase === 'editing' && duel.first && duel.second ? [duel.first, duel.second] : editFaces;
   return <main className="app-shell">
     <header>
-      <a className="brand" href="#top" onClick={exitScan}><i className="brand-capsule" />MOG<span>/</span>SCAN</a>
-      <button className="leaderboard-link" onClick={() => { setEntries(loadLeaderboard()); setLeaderboardOpen(true); }}>Leaderboard</button>
-      <button className="leaderboard-link" onClick={() => void openMogEdit()}>Who Mogs Who?</button>
+      <a className="brand" href="#/" onClick={(event) => { event.preventDefault(); exitScan(); navigate({ name: 'home' }); }}><i className="brand-capsule" />MOG<span>/</span>SCAN</a>
+      <nav className="app-nav" aria-label="Main">
+        {apiEnabled && <button className={`leaderboard-link${route.name === 'latest' || route.name === 'post' ? ' current' : ''}`} aria-current={route.name === 'latest' ? 'page' : undefined} onClick={() => navigate({ name: 'latest' })}>Latest</button>}
+        <button className="leaderboard-link" onClick={() => { setEntries(loadLeaderboard()); setLeaderboardOpen(true); }}>Leaderboard</button>
+        {apiEnabled && <button className="leaderboard-link" onClick={() => { navigate({ name: 'home' }); window.requestAnimationFrame(() => document.getElementById('duel-start')?.focus()); }}>1v1</button>}
+        {apiEnabled && <button className={`leaderboard-link${route.name === 'my-mogs' || route.name === 'my-upmogs' ? ' current' : ''}`} aria-current={route.name === 'my-mogs' || route.name === 'my-upmogs' ? 'page' : undefined} onClick={() => navigate({ name: 'my-mogs' })}>My Mogs</button>}
+        <button className="leaderboard-link" onClick={() => void openMogEdit()}>Who Mogs Who?</button>
+      </nav>
       <span className="edition">THE BLACK CAPSULE <span>VOL. 001</span></span>
       <span className="status"><i className={tracking ? 'live' : ''} />{state === 'permission' ? 'AWAITING CAMERA' : tracking ? 'CAMERA ACTIVE' : 'CAMERA OFF'}</span>
     </header>
-    <section className={`scan-card ${state}`}>
+    {socialRoute && <section className="scan-card social-view">
+      <div className="stage-label"><span>ANONYMOUS / NO LOGIN</span><span>{route.name === 'my-mogs' || route.name === 'my-upmogs' ? 'THIS BROWSER' : 'LATEST MOGS'}</span></div>
+      <div className="social-body">
+        {route.name === 'latest' && <><div className="social-heading"><p className="eyebrow"><span className="tiny-cross">✳</span> NEWEST FIRST · VOTES DON’T REORDER</p><h1>Latest <em>mogs.</em></h1></div><MogFeed kind="latest" onNavigate={navigate} /></>}
+        {route.name === 'post' && <MogPostDetail key={route.id} id={route.id} onNavigate={navigate} />}
+        {(route.name === 'my-mogs' || route.name === 'my-upmogs') && <><div className="social-heading"><h1>My <em>mogs.</em></h1></div><MyMogs tab={route.name} onNavigate={navigate} onShare={setShareSource} /></>}
+      </div>
+    </section>}
+    {!socialRoute && <section className={`scan-card ${state}`}>
       <div className="stage-label"><span>UNFILTERED / UNSERIOUS</span><span>{state === 'idle' ? 'READY WHEN YOU ARE' : state === 'result' ? 'VERDICT DELIVERED' : 'LIVE SESSION'}</span></div>
       <div className="video-stage">
         {state === 'idle' && !duel && <div className="hero">
@@ -814,7 +953,7 @@ function App() {
             <p className="hero-description">Three frames. One score. Zero glazing.<br />Your camera roll is about to get humbled.</p>
             <div className="hero-actions">
               <button className="primary start-button" onClick={() => void startCamera()}>Start scan <span aria-hidden="true">↗</span></button>
-              <button className="secondary upload-button" onClick={startLocalDuel}>1V1 MOG OFF <span aria-hidden="true">↗</span></button>
+              <button id="duel-start" className="secondary upload-button" onClick={startLocalDuel}>1V1 MOG OFF <span aria-hidden="true">↗</span></button>
               <button className="secondary upload-button" onClick={() => uploadInputRef.current?.click()}>Upload a photo <span aria-hidden="true">↑</span></button>
             </div>
             <p className="consent-note">Camera starts on your say-so. Selected frames only. Uploads send just the cropped face.</p>
@@ -859,7 +998,7 @@ function App() {
           <div className="tier"><span className="tier-mark" />{result.tier}</div>
           <h2 className="verdict">{verdict.headline}</h2>
           <p className="verdict-detail">{verdict.detail}</p>
-          <div className="actions"><button className="primary" onClick={scanAgain}>Run it back <span aria-hidden="true">↗</span></button><button className="secondary" onClick={() => setSaveOpen(true)}>Save leaderboard</button></div>
+          <div className="actions"><button className="primary" onClick={scanAgain}>Run it back <span aria-hidden="true">↗</span></button><button className="secondary" onClick={() => { setLeaderboardError(''); if (!displayName && session.displayName) setDisplayName(session.displayName); setSaveOpen(true); }}>Save leaderboard</button>{canShareResult && <button className="secondary" onClick={openShareForResult}>Share as mog <span aria-hidden="true">↗</span></button>}</div>
           <section className="level-up">
             {tierPlaybooks.slice(Math.max(0, tierPlaybooks.findIndex((playbook) => playbook.tier === result.tier) + 1), Math.max(0, tierPlaybooks.findIndex((playbook) => playbook.tier === result.tier) + 2)).map((playbook) => <details key={playbook.tier}><summary>ASCENDING TO {playbook.tier} <span>+</span></summary><p>General style ideas, not an explanation of your score.</p><ol>{playbook.steps.map((step) => <li key={step}>{step}</li>)}</ol></details>)}
           </section>
@@ -883,10 +1022,49 @@ function App() {
         </div>}
       </div>
       {active && <div className="scan-controls"><div className="progress-line" role="progressbar" aria-label="Scan progress" aria-valuenow={progress} aria-valuemin={0} aria-valuemax={100}><span style={{ width: `${progress}%` }} /></div><p role="status">{message}</p><button className="exit" onClick={exitScan}>End scan</button></div>}
-    </section>
+    </section>}
+    {apiEnabled && !socialRoute && state === 'idle' && !duel && <section className="latest-home" aria-labelledby="latest-home-title">
+      <div className="latest-home-head"><p className="eyebrow"><span className="tiny-cross">✳</span> FRESH FROM THE CAPSULE</p><h2 id="latest-home-title">Latest Mogs</h2><button className="text-button" onClick={() => navigate({ name: 'latest' })}>See all →</button></div>
+      <MogFeed kind="latest" preview onNavigate={navigate} />
+    </section>}
     <footer><span>THICK SKIN. GOOD LIGHTING.</span><span>FOR ENTERTAINMENT. NOT OBJECTIVE TRUTH.</span><span>MOG / SCAN © {new Date().getFullYear()}</span></footer>
-    {saveOpen && <div className="modal"><div className="modal-card"><h2>Save locally</h2><p>Your name, score, tier, date, and this scan photo save in this browser. The photo is only used for local Who Mogs Who? playback.</p><input value={displayName} onChange={(e) => setDisplayName(e.target.value)} placeholder="Display name" maxLength={20} />{leaderboardError && <p>{leaderboardError}</p>}<div className="actions"><button className="primary" onClick={() => void saveToLeaderboard()}>Save</button><button className="secondary" onClick={() => setSaveOpen(false)}>Cancel</button></div></div></div>}
-    {leaderboardOpen && <div className="modal"><div className="modal-card leaderboard"><h2>Local leaderboard</h2>{entries.length ? <ol>{entries.map((entry, i) => <li key={entry.id}><span>#{i + 1} {entry.displayName}</span><b>{entry.score} · {entry.tier}</b><button className="text-button" onClick={() => { const next = entries.filter((item) => item.id !== entry.id); saveLeaderboard(next); setEntries(next); void deleteLeaderboardPhoto(entry.id); }}>Delete</button></li>)}</ol> : <p>No saved scores.</p>}<div className="actions leaderboard-actions"><button className="secondary" onClick={() => { setLeaderboardOpen(false); void openMogEdit(); }}>Who Mogs Who?</button><button className="secondary" onClick={() => { if (window.confirm('Clear local records and photos?')) { clearLeaderboard(); void clearLeaderboardPhotos(); setEntries([]); } }}>Clear all</button><button className="primary" onClick={() => setLeaderboardOpen(false)}>Done</button></div></div></div>}
+    {saveOpen && result && <div className="modal"><div className="modal-card save-card">
+      {apiEnabled && result.serverResultId ? (sharedSave ? <>
+        <h2>{sharedSave.outcome === 'not_higher' ? 'Shared best unchanged' : 'Saved'}</h2>
+        <p>{sharedSave.outcome === 'not_higher'
+          ? `Your shared best is ${sharedSave.entry.score}. This scan stays off the shared leaderboard, so it can’t be posted as a mog.`
+          : `You’re #${sharedSave.entry.rank} on the shared leaderboard as ${sharedSave.entry.displayName}.`}</p>
+        {leaderboardError && <p className="mog-inline-error">{leaderboardError}</p>}
+        <div className="actions">
+          {canShareResult && <button className="primary" onClick={openShareForResult}>Share as mog <span aria-hidden="true">↗</span></button>}
+          {sharedSave.entry.resultId === result.serverResultId && sharedSave.entry.postStatus === 'active' && sharedSave.entry.postId && <button className="primary" onClick={() => navigate({ name: 'post', id: sharedSave.entry.postId! })}>View mog</button>}
+          <button className="secondary" onClick={() => setSaveOpen(false)}>Done</button>
+        </div>
+      </> : <>
+        <h2>Save to leaderboard</h2>
+        <p>Your name, score, tier, and date go on the shared leaderboard. No photo is uploaded. No account: this browser’s anonymous cookie is what lets you manage it.</p>
+        <input value={displayName} onChange={(e) => setDisplayName(e.target.value)} placeholder="Display name" maxLength={20} disabled={saving || confirmReplace !== null} />
+        <label className="toggle save-local"><input type="checkbox" checked={keepLocal} onChange={(event) => setKeepLocal(event.target.checked)} /> Also keep it on this device, with this scan photo, for Who Mogs Who?</label>
+        {confirmReplace && <p className="replace-prompt">Replace your shared {confirmReplace.currentScore} with {confirmReplace.newScore}?</p>}
+        {leaderboardError && <p className="mog-inline-error">{leaderboardError}</p>}
+        <div className="actions">{confirmReplace
+          ? <><button className="primary" disabled={saving} onClick={() => void saveToLeaderboard(true)}>Replace</button><button className="secondary" disabled={saving} onClick={() => setConfirmReplace(null)}>Keep old score</button></>
+          : <><button className="primary" disabled={saving} onClick={() => void saveToLeaderboard()}>{saving ? 'Saving…' : 'Save'}</button><button className="secondary" disabled={saving} onClick={() => setSaveOpen(false)}>Cancel</button></>}</div>
+      </>) : <>
+        <h2>Save locally</h2><p>Your name, score, tier, date, and this scan photo save in this browser. The photo is only used for local Who Mogs Who? playback.</p>
+        {apiEnabled && <p className="social-note">This scan wasn’t recorded by the server (cookies blocked, offline, or a local 1v1), so it can only be saved on this device and can’t be posted.</p>}
+        <input value={displayName} onChange={(e) => setDisplayName(e.target.value)} placeholder="Display name" maxLength={20} />{leaderboardError && <p>{leaderboardError}</p>}<div className="actions"><button className="primary" onClick={() => void saveToLeaderboard()}>Save</button><button className="secondary" onClick={() => setSaveOpen(false)}>Cancel</button></div>
+      </>}
+    </div></div>}
+    {leaderboardOpen && <div className="modal"><div className="modal-card leaderboard">{apiEnabled && <div className="social-tabs small" role="tablist" aria-label="Leaderboard">
+      <button type="button" role="tab" aria-selected={leaderboardTab === 'shared'} className={leaderboardTab === 'shared' ? 'active' : ''} onClick={() => setLeaderboardTab('shared')}>Shared</button>
+      <button type="button" role="tab" aria-selected={leaderboardTab === 'local'} className={leaderboardTab === 'local' ? 'active' : ''} onClick={() => setLeaderboardTab('local')}>This device</button>
+    </div>}{apiEnabled && leaderboardTab === 'shared' ? <><h2>Shared leaderboard</h2><SharedLeaderboard onShare={(source) => { setShareSource(source); }} onOpenPost={(postId) => navigate({ name: 'post', id: postId })} onOpenLatest={() => navigate({ name: 'latest' })} /><div className="actions leaderboard-actions"><button className="primary" onClick={() => setLeaderboardOpen(false)}>Done</button></div></> : <><h2>{apiEnabled ? 'This device' : 'Local leaderboard'}</h2>{entries.length ? <ol>{entries.map((entry, i) => <li key={entry.id}><span>#{i + 1} {entry.displayName}</span><b>{entry.score} · {entry.tier}</b><button className="text-button" onClick={() => { const next = entries.filter((item) => item.id !== entry.id); saveLeaderboard(next); setEntries(next); void deleteLeaderboardPhoto(entry.id); }}>Delete</button></li>)}</ol> : <p>No saved scores.</p>}<div className="actions leaderboard-actions"><button className="secondary" onClick={() => { setLeaderboardOpen(false); void openMogEdit(); }}>Who Mogs Who?</button><button className="secondary" onClick={() => { if (window.confirm('Clear local records and photos?')) { clearLeaderboard(); void clearLeaderboardPhotos(); setEntries([]); } }}>Clear all</button><button className="primary" onClick={() => setLeaderboardOpen(false)}>Done</button></div></>}</div></div>}
+    {shareSource && <ShareMogSheet key={shareSource.resultId} source={shareSource} onClose={() => setShareSource(null)} onOpenPost={(postId) => { setShareSource(null); setSaveOpen(false); navigate({ name: 'post', id: postId }); }} onPosted={(post) => {
+      setShareSource(null); setSaveOpen(false); setLeaderboardOpen(false);
+      setSharedSave((current) => (current && current.entry.resultId === shareSource.resultId ? { ...current, entry: { ...current.entry, postId: post.id, postStatus: 'active' } } : current));
+      navigate({ name: 'post', id: post.id });
+    }} />}
     {editOpen && <MogEdit faces={duelFaces} loading={editLoading} fixedParticipants={duel?.phase === 'editing'} onClose={() => { setEditOpen(false); if (duelRef.current?.phase === 'editing') clearDuel(); }} />}
     <canvas ref={frameCanvasRef} className="hidden" /><canvas ref={qualityCanvasRef} className="hidden" />
     <input ref={uploadInputRef} type="file" accept="image/*" className="hidden" onChange={(event) => { const file = event.target.files?.[0]; event.target.value = ''; if (file) void scanImage(file); }} />

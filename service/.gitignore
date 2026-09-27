@@ -5,3 +5,4 @@ __pycache__/
 .env
 models/**/weights/
 models/**/beauty_regressor.pt
+data/

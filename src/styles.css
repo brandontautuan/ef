@@ -216,10 +216,102 @@ footer { display: flex; justify-content: space-between; gap: 15px; padding-top: 
 .hidden { display: none; }
 @keyframes rise { from { opacity: 0; transform: translateY(10px); } to { opacity: 1; transform: translateY(0); } }
 
+
+/* ---- Anonymous social: nav, Latest Mogs, post cards, votes, composer ---- */
+.app-nav { display: flex; flex-wrap: wrap; align-items: center; gap: 2px; }
+.leaderboard-link.current { color: var(--paper); box-shadow: inset 0 -1px 0 var(--red); }
+.social-view { display: flex; flex-direction: column; }
+.social-body { width: min(100%, 760px); margin: 0 auto; padding: 44px 24px 60px; }
+.social-heading { margin-bottom: 26px; }
+.social-heading .eyebrow { margin-bottom: 18px; }
+.social-heading h1 { font-size: clamp(64px, 8vw, 112px); }
+.latest-home { margin-top: 18px; border: 1px solid #33332f; background: #0d0d0c; padding: 28px clamp(16px, 4vw, 44px) 34px; }
+.latest-home-head { display: grid; grid-template-columns: 1fr auto; align-items: end; gap: 6px 16px; margin-bottom: 20px; }
+.latest-home-head .eyebrow { grid-column: 1 / -1; margin: 0; }
+.latest-home-head h2 { margin: 0; font: 800 clamp(40px, 5vw, 64px)/.9 'Barlow Condensed', Impact, sans-serif; text-transform: uppercase; letter-spacing: -.03em; }
+.mog-feed { position: relative; }
+.mog-list { list-style: none; margin: 0; padding: 0; display: grid; gap: 14px; }
+.mog-feed.preview .mog-list { grid-template-columns: repeat(auto-fill, minmax(min(100%, 300px), 1fr)); }
+.feed-status { color: #aaa9a3; font-size: 13px; line-height: 1.6; padding: 18px 0; }
+.feed-status h2 { color: var(--paper); font-size: 28px; letter-spacing: -.04em; margin: 0 0 8px; }
+.feed-status.error p { color: #ff9b88; }
+.load-more { margin: 18px auto 0; display: flex; min-width: 200px; }
+.new-mogs { position: sticky; top: 10px; z-index: 5; display: block; margin: 0 auto 14px; border: 1px solid #ee553d88; background: #140d0b; color: var(--paper); font: 11px var(--mono); letter-spacing: .1em; text-transform: uppercase; padding: 10px 16px; border-radius: 2px; }
+.new-mogs:hover { border-color: var(--red); }
+.mog-card { position: relative; border: 1px solid #2b2b28; background: #0a0a09; padding: 18px 18px 14px; animation: rise .35s ease-out; }
+.mog-card.detail { padding: 24px; }
+.mog-card-head { display: flex; justify-content: space-between; align-items: baseline; gap: 12px; font: 11px var(--mono); letter-spacing: .04em; color: #92918c; }
+.mog-card-head a, .mog-card-head p { color: inherit; text-decoration: none; margin: 0; overflow-wrap: anywhere; }
+.mog-card-head a:hover b { text-decoration: underline; text-underline-offset: 3px; }
+.mog-card-head b { color: var(--paper); font-weight: 500; }
+.mog-owner-tag { flex: none; color: var(--red); font-size: 9px; letter-spacing: .12em; }
+.mog-caption { margin: 12px 0 0; font-size: 15px; line-height: 1.5; white-space: pre-wrap; overflow-wrap: anywhere; color: #dedbd3; }
+.mog-result { display: flex; align-items: flex-end; flex-wrap: wrap; gap: 8px 18px; margin: 14px 0; padding: 14px 0; border-top: 1px solid var(--line); border-bottom: 1px solid var(--line); }
+.mog-result img { width: 100%; max-height: 360px; object-fit: contain; background: #000; border: 1px solid var(--line); }
+.mog-score { display: flex; align-items: baseline; line-height: .85; font-variant-numeric: tabular-nums; }
+.mog-score > span { font: 800 clamp(64px, 9vw, 92px)/.85 'Barlow Condensed', Impact, sans-serif; letter-spacing: -.04em; }
+.mog-score > small { font: 500 24px/1 'Barlow Condensed', Impact, sans-serif; color: #7d7d75; margin-left: 6px; }
+.mog-card.detail .mog-score > span { font-size: clamp(96px, 16vw, 150px); }
+.mog-result-meta { display: flex; flex-direction: column; align-items: flex-start; gap: 8px; padding-bottom: 6px; }
+.mog-result-meta .tier { margin: 0; }
+.mog-result-meta small { font: 9px var(--mono); letter-spacing: .12em; color: #7f7e78; }
+.mog-card-foot { display: flex; justify-content: space-between; align-items: center; flex-wrap: wrap; gap: 8px 12px; }
+.mog-card-actions { display: flex; gap: 4px; }
+.mog-card-actions .text-button { padding: 8px 6px; }
+.mog-votes { min-width: 0; }
+.mog-vote-row { display: flex; align-items: center; gap: 8px; }
+.vote-button { display: inline-flex; align-items: center; gap: 6px; min-height: 40px; padding: 8px 12px; border: 1px solid #3f3f3a; border-radius: 2px; background: transparent; color: #cfccc4; font: 11px var(--mono); letter-spacing: .06em; text-transform: uppercase; transition: border-color .15s, background .15s, color .15s; }
+.vote-button span { font-size: 9px; }
+.vote-button:hover:not(:disabled) { border-color: var(--paper); color: var(--paper); }
+.vote-button.selected { border-color: var(--red); color: var(--paper); background: #ee553d1f; }
+.vote-button.selected span { color: var(--red); }
+.vote-button:disabled { opacity: .7; cursor: progress; }
+.mog-count { min-width: 64px; text-align: center; font: 700 18px/1 'Barlow Condensed', Impact, sans-serif; letter-spacing: .01em; color: var(--paper); font-variant-numeric: tabular-nums; white-space: nowrap; }
+.mog-count.negative { color: #9e9c95; }
+.mog-inline-error { color: #ff9b88 !important; font-size: 12px !important; margin: 8px 0 0 !important; }
+.mog-inline-note { color: #aaa9a3; font-size: 12px; margin: 8px 0 0; overflow-wrap: anywhere; }
+.mog-confirm { margin-top: 12px; padding: 14px; border: 1px solid #ee553d55; background: #120c0b; }
+.mog-confirm p { margin: 0 0 12px; font-size: 13px; }
+.mog-confirm .actions { justify-content: flex-start; }
+.mog-confirm .primary, .mog-confirm .secondary { min-height: 40px; padding: 10px 16px; }
+.mog-detail > .text-button { padding-left: 0; margin-bottom: 14px; }
+.social-tabs { display: flex; gap: 0; border-bottom: 1px solid var(--line); margin-bottom: 16px; }
+.social-tabs button { border: 0; background: none; color: #9a9892; font: 11px var(--mono); letter-spacing: .1em; text-transform: uppercase; padding: 12px 14px; border-bottom: 2px solid transparent; margin-bottom: -1px; }
+.social-tabs button.active { color: var(--paper); border-bottom-color: var(--red); }
+.social-tabs.small button { padding: 9px 10px; font-size: 10px; }
+.social-note { color: #8d8b83; font-size: 11px; line-height: 1.6; margin: 0 0 18px; }
+.shareable { border: 1px solid var(--line); padding: 14px 16px; margin-bottom: 18px; }
+.shareable .eyebrow { margin-bottom: 8px; }
+.shareable ul { list-style: none; margin: 0; padding: 0; }
+.shareable li { display: flex; justify-content: space-between; align-items: center; gap: 12px; padding: 6px 0; font-size: 13px; }
+.shareable li small { font: 9px var(--mono); color: #7f7e78; margin-left: 6px; }
+.text-button.strong { color: var(--paper); font-weight: 700; text-decoration-color: var(--red); }
+.shared-board ol { list-style: none; padding: 0; margin: 0 0 12px; }
+.shared-board li.mine { background: #ee553d10; box-shadow: inset 2px 0 0 var(--red); padding-left: 10px; }
+.shared-board li em { font-style: normal; color: var(--red); font-size: 11px; }
+.shared-board .row-actions { grid-column: 1 / -1; display: flex; flex-wrap: wrap; gap: 4px 14px; align-items: center; }
+.shared-board .row-actions .text-button { padding: 3px 0; font-size: 11px; }
+.shared-board .muted { color: #7f7e78; font-size: 11px; }
+.shared-board .my-row { border-top: 1px dashed var(--line); padding-top: 4px; }
+.shared-board > .text-button { padding-left: 0; }
+.share-sheet .eyebrow { margin-bottom: 12px; }
+.share-preview { display: flex; flex-wrap: wrap; align-items: flex-end; gap: 8px 16px; border: 1px solid var(--line); padding: 14px; margin: 14px 0 18px; }
+.share-author { width: 100%; font: 11px var(--mono); color: #aaa9a3; }
+.share-preview .tier { margin: 0 0 6px; }
+.caption-field { display: block; margin-bottom: 12px; }
+.caption-field > span { display: block; font: 10px var(--mono); letter-spacing: .08em; color: #aaa9a3; margin-bottom: 8px; text-transform: uppercase; }
+.caption-field textarea { width: 100%; min-height: 84px; resize: vertical; border: 1px solid #53534c; border-radius: 2px; background: #080808; color: var(--paper); padding: 12px; font: 14px/1.5 'DM Sans', Arial, sans-serif; }
+.caption-field textarea:focus-visible { outline: 2px solid var(--red); outline-offset: 2px; }
+.caption-field > small { display: block; text-align: right; font: 10px var(--mono); color: #7f7e78; margin-top: 6px; }
+.caption-field > small.over { color: #ff9b88; }
+.share-fineprint { color: #8d8b83 !important; font-size: 11px !important; }
+.save-card .save-local { justify-content: flex-start; text-align: left; margin: -6px 0 14px; }
+.replace-prompt { color: var(--paper) !important; font-weight: 700; }
+
 @media (min-width: 1500px) { .hero, .video-stage { min-height: 740px; } }
 @media (max-width: 900px) {
   .edition { display: none; }
-  .leaderboard-link:first-of-type { margin-left: auto; }
+  .app-nav { margin-left: auto; }
   .hero { grid-template-columns: 1fr 1fr; padding-left: 5%; padding-right: 2%; }
   h1 { font-size: clamp(65px, 10vw, 95px); }
   .capsule { width: 265px; height: 105px; }
@@ -266,6 +358,19 @@ footer { display: flex; justify-content: space-between; gap: 15px; padding-top: 
   .actions { gap: 9px; }
   .actions button { width: 100%; justify-content: space-between; }
   .modal-card { padding: 22px; }
+  header { flex-wrap: wrap; row-gap: 8px; }
+  .app-nav { order: 3; width: 100%; margin: 0; justify-content: space-between; border-top: 1px solid var(--line); padding-top: 6px; }
+  .app-nav .leaderboard-link { padding: 8px 3px; font-size: 9px; letter-spacing: .03em; }
+  .social-body { padding: 28px 14px 40px; }
+  .social-heading h1 { font-size: clamp(56px, 17vw, 84px); }
+  .latest-home { padding: 22px 14px 26px; }
+  .mog-card { padding: 14px 12px 12px; }
+  .mog-card.detail { padding: 16px 12px; }
+  .vote-button { padding: 8px 9px; gap: 5px; font-size: 10px; letter-spacing: .02em; }
+  .mog-count { min-width: 52px; font-size: 16px; }
+  .mog-card-foot { align-items: flex-start; }
+  .social-tabs button { padding: 11px 10px; font-size: 10px; }
+  .mog-confirm .actions button { width: auto; }
   .edit-selectors { grid-template-columns: 1fr; }
   .edit-window-card { padding: 20px 16px 16px; }
   .edit-window-content { grid-template-columns: 1fr; grid-template-rows: minmax(0, 1fr) auto; gap: 14px; align-items: center; overflow-y: auto; }

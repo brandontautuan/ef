@@ -29,3 +29,14 @@ VITE_SCAN_DEBUG=1 VITE_SCORE_ENDPOINT="http://localhost:8000/v1/score" npm run d
 ```
 
 The Face Landmarker WASM/model are loaded at runtime from the official MediaPipe CDN and model bucket. Production deployment should serve the app over HTTPS, configure the service CORS origin precisely, and pin/audit those runtime assets before launch.
+
+## Shared leaderboard and Latest Mogs (anonymous social)
+
+Set `VITE_MOG_API_BASE=/api/mog` to turn on the shared leaderboard and the
+anonymous social feed. There's no login: an HttpOnly cookie is the only
+identity. Scans are scored and recorded by the service. After saving a result
+to the shared leaderboard you can **Share as mog**. Posts appear in **Latest
+Mogs**, anyone can **Up Mog** or **Down Mog** them, and the same browser keeps
+**My Mogs**, **My Up Mogs**, and delete rights. In development, Vite proxies
+`/api/mog` to the API on port 8000 (run it with `SESSION_COOKIE_SECURE=0`).
+See `deploy/README.md` for production proxies and the homepage route bridge.

@@ -9,6 +9,14 @@ native score against the model manifest, and returns only
 **Image-safe:** image bytes are decoded in memory, scored, and released. Nothing
 image-derived is persisted, cached, backed up, or logged.
 
+**Shared data:** the same service also hosts anonymous cookie sessions
+(`/v1/session`), registered scans that record server-computed results
+(`/v1/scans`), the shared leaderboard (`/v1/leaderboard`), and the anonymous
+social system (`/v1/social/...`). These store results, posts, and votes in
+SQLite (`DATABASE_PATH`, default `service/data/mog.sqlite3`); migrations in
+`migrations/` run at startup. See `../deploy/README.md` for proxies, rollout,
+backups (`python -m app.manage backup ...`), and counter reconciliation.
+
 **Launch gate:** only a **mock/staging** model ships (`models/mock-ui-v1`). It is
 clearly labeled and must not be used for public rating until a licensed, reviewed
 model package replaces it with a new `model_version`.

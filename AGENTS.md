@@ -9,9 +9,11 @@ with or without their face. Scores are presented as entertainment-oriented model
 estimates, not objective measures of attractiveness or personal worth.
 
 This repository contains a React/TypeScript client and a separate Python/FastAPI
-service. There is no database, account system, or persistent scan history.
-The default scoring paths are mocks; a working demo is not a validated rating
-product.
+service. There is no account system. When the shared API is enabled, a SQLite
+database stores anonymous cookie sessions, server-computed scan results (score,
+tier, versions; never images), the shared leaderboard, and the anonymous social
+system (mogs, Up Mog/Down Mog votes). The default scoring paths are mocks; a
+working demo is not a validated rating product.
 
 ## Repository map
 
@@ -28,6 +30,16 @@ product.
 | `service/app/concurrency.py`, `rate_limit.py`, `errors.py`, `logging_utils.py` | Service admission control, rate limits, stable errors, and restricted request logging. These files all live under `service/app/`. |
 | `service/models/` | Versioned model manifests and display-calibration artifacts. Research weights are not checked in. |
 | `service/tests/` | Pytest coverage for API responses, mock determinism, calibration metadata, rate limiting, and logging. |
+| `src/api/` | Same-origin API helper (`client.ts`) and anonymous session bootstrap (`session.ts`: single-flight, Web Locks, confirm-before-mutate). |
+| `src/social/` | Social contracts, typed endpoint calls, normalized post store with optimistic votes (`useSocialStore.ts`), snapshot-paginated feeds (`useFeed.ts`), and hash routes + iframe bridge (`useAppRoute.ts`). |
+| `src/components/Mog*.tsx`, `MyMogs.tsx`, `ShareMogSheet.tsx`, `SharedLeaderboard.tsx` | Post cards, vote controls, Latest/My feeds, post detail, share composer, and the shared leaderboard tab. |
+| `service/app/db.py`, `service/migrations/` | SQLite connections (FKs, WAL, busy timeout, `BEGIN IMMEDIATE`), forward-only migrations applied at startup, backups. |
+| `service/app/sessions.py` | `__Host-mog_session` HttpOnly cookie sessions; only the token hash is stored. |
+| `service/app/scans.py`, `scoring.py`, `display_score.py` | Registered scans (server computes the median, display score, and tier) sharing the `/v1/score` inference path. |
+| `service/app/leaderboard.py` | Shared best-per-cohort leaderboard and `leaderboard_publications` history. |
+| `service/app/social/` | Publish/vote/delete transactions, feeds, idempotency, media hooks, and HTTP routes under `/v1/social`. |
+| `service/app/manage.py` | Operator commands: migrate, backup, reconcile-votes, cleanup-media. |
+| `deploy/` | Zo Space proxy mapping, rollout order, and the homepage iframe route bridge script. |
 | `Mog_Scan_*.md` | Product intent, client/service design, and proposed remaining work. Some descriptions lag behind the code. |
 
 ## How a scan works
@@ -82,6 +94,14 @@ Then start (or restart) the client from the repository root:
 VITE_SCORE_ENDPOINT=http://localhost:8000/v1/score npm run dev
 ```
 
+To enable the shared leaderboard and anonymous social features, also set
+`VITE_MOG_API_BASE=/api/mog`. Vite proxies `/api/mog/...` to the API
+(`MOG_API_PROXY_TARGET`, default `http://127.0.0.1:8000`) with the same route
+mapping as production, so the session cookie is first-party. Start the API with
+`SESSION_COOKIE_SECURE=0` on plain-HTTP localhost (`start-research.sh` already
+does). Without `VITE_MOG_API_BASE`, the app behaves as before: local-only
+leaderboard, no social UI.
+
 The endpoint must include `/v1/score`. Add `VITE_SCAN_DEBUG=1` for browser console
 diagnostics and result calculation details. Vite defaults to port 5173; the API
 allows origins `http://localhost:5173` and `http://localhost:5174` by default.
@@ -102,7 +122,9 @@ testing outside localhost.
   TypeScript checking and produces the Vite build. There is currently no client
   test runner or lint script in `package.json`.
 - Service changes: activate `service/.venv`, then run `python -m pytest` from
-  `service/`. Keep the default mock model active for the existing tests.
+  `service/`. Keep the default mock model active for the existing tests. Each
+  test gets a temporary database; `tests/helpers.py` seeds sessions, scans, and
+  results with synthetic images only.
 - Camera or lifecycle changes: manually check permission denial, no/multiple
   faces, quality failure and recovery, timeout, backgrounding, retry, rescan,
   exit, and card export with and without a face. Verify camera tracks, timers,
@@ -224,3 +246,46 @@ and a research runner that some of its baseline text describes as absent.
   a reduced-motion fallback. No real person was scanned during these UI checks.
 - Existing unrelated `package.json` changes add `allowScripts` entries for
   esbuild/fsevents. Preserve them; they were present before the model/frontend work.
+
+## Session handoff — September 27, 2026: anonymous social system
+
+Implemented `Mog_Scan_Anonymous_Social_System_Implementation.md`, plus the lean
+shared foundation it depends on (section 16A), because none of the multiplayer
+plan's database, sessions, or server results existed yet.
+
+- **Foundation:** SQLite with migrations `0001_foundation` and `0002_social`;
+  cookie sessions (`POST/GET /v1/session`, GET never creates identity, rolling
+  daily renewal); registered scans (`/v1/scans`, 3 live frames or 1 upload,
+  duplicate sequences never counted twice, JS-compatible rounding); shared
+  leaderboard (best per player and cohort, confirmed higher-score replacement,
+  competition ranks, publication history written in the same transaction).
+  Match (1v1) tables, playback, and pending publication are **not** built.
+- **Social:** publish with `Idempotency-Key` creates the post and the author's
+  +1 vote in one transaction; desired-state `PUT .../vote` with per-player
+  revisions (stale → `409 vote_conflict` with the latest state); owner-only
+  delete leaves a tombstone that blocks reposting; Latest/My Mogs snapshot
+  keyset pagination, My Up Mogs by latest positive vote, `head` and `state`
+  endpoints; per-player and per-network limits; periodic maintenance.
+- **Client:** solo scans register with the service when `VITE_MOG_API_BASE` is
+  set (falls back to legacy local scoring if registration fails, and then the
+  result is local-only). The save modal posts to the shared board (and keeps
+  the local copy with photo if checked), then offers Share as mog. Nav has
+  Latest, Leaderboard (Shared/This device tabs), 1v1, My Mogs. The home page
+  shows Latest Mogs only while idle. Routes: `#/mogs`, `#/mogs/<id>`,
+  `#/my-mogs`, `#/my-upmogs`. Leaving home stops any active camera/tracker and
+  closes the edit (audio).
+- **Post photos:** the plumbing (staging, attach, serve while active, cleanup)
+  exists, but `find_owned_source_photo` returns None. Solo crops are never
+  retained (no-persistence boundary) and match media doesn't exist yet, so
+  every post is a structured result card and `include_photo` returns
+  `410 source_media_expired`.
+- **Not done here:** Zo Space proxy routes and the homepage bridge must be
+  applied in Zo Space (see `deploy/README.md`). No production deploy was made.
+- **Verified:** 81 pytest tests (15 original + 66 new, including concurrency
+  and delete/vote races), `npm run build`, and Playwright runs through the Vite
+  proxy: two browser identities, publish/vote/switch/remove, reload
+  persistence, My Up Mogs membership, new-mogs banner, cross-tab identity,
+  owner delete, cleared cookies, iframe bridge deep links and Back/Forward,
+  share URL, and no horizontal overflow at 320/390px. The upload scan → save →
+  share flow ran with a stubbed MediaPipe module (CDN blocked in that sandbox).
+  Real-camera scans, Safari/iOS cookies, and the live Space proxy are untested.

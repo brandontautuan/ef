@@ -12,4 +12,5 @@ if [ ! -x .venv/bin/python ]; then
   exit 1
 fi
 
-MODEL_DIR=models/scut-prototype-v1 exec .venv/bin/python -m uvicorn app.main:app --host 127.0.0.1 --port 8000
+# Plain-HTTP localhost: use the separately named dev session cookie.
+SESSION_COOKIE_SECURE=0 MODEL_DIR=models/scut-prototype-v1 exec .venv/bin/python -m uvicorn app.main:app --host 127.0.0.1 --port 8000
