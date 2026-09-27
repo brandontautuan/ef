@@ -94,13 +94,13 @@ def test_display_map_matches_javascript_round(version):
 
     def js(native):  # Math.round(Math.min(100, Math.max(0, x))) with JS half-up rounding
         span = display_map.native_max - display_map.native_min
-        x = ((native - display_map.native_min) / span) * 100
+        x = ((native - display_map.native_min) / span) * 100 + display_map.score_offset
         return math.floor(min(100, max(0, x)) + 0.5)
 
     for i in range(0, 5001):
         native = 0.5 + i * 0.001
         assert display_map.score(native) == js(native)
-    assert display_map.score(display_map.native_min) == 0
+    assert display_map.score(display_map.native_min) == display_map.score_offset
     assert display_map.score(display_map.native_max) == 100
 
 
@@ -108,6 +108,13 @@ def test_half_way_rounds_up_not_to_even():
     m = get_display_map("linear-1-5-v1")
     assert m.score(1.02) == 1  # 0.5 -> 1 (Python round() would give 0)
     assert m.score(1.1) == 3  # 2.5 -> 3 (round() would give 2)
+
+
+def test_boosted_display_map_adds_ten_points_and_caps_at_one_hundred():
+    m = get_display_map("linear-1-5-plus-10-v1")
+    assert m.score(2.32) == 43
+    assert m.score(2.76) == 54
+    assert m.score(5.0) == 100
 
 
 def test_tier_boundaries():

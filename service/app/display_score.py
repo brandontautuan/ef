@@ -20,10 +20,11 @@ class DisplayMap:
     version: str
     native_min: float
     native_max: float
+    score_offset: int = 0
 
     def score(self, native: float) -> int:
         span = self.native_max - self.native_min
-        value = ((native - self.native_min) / span) * 100
+        value = ((native - self.native_min) / span) * 100 + self.score_offset
         return int(min(100, max(0, math.floor(value + 0.5))))
 
 
@@ -32,6 +33,9 @@ DISPLAY_MAPS: dict[str, DisplayMap] = {
     "heuristic-2.4-4.0-v1": DisplayMap("heuristic-2.4-4.0-v1", 2.4, 4.0),
     # The deployed site's native 1-5 linear map described in the 1v1 plan.
     "linear-1-5-v1": DisplayMap("linear-1-5-v1", 1.0, 5.0),
+    # A small display-only boost. Keep a distinct version so leaderboard
+    # results using another conversion are never mixed with these results.
+    "linear-1-5-plus-10-v1": DisplayMap("linear-1-5-plus-10-v1", 1.0, 5.0, 10),
 }
 
 # Existing tier thresholds; unchanged by the shared/social work.

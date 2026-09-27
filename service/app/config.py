@@ -84,7 +84,10 @@ class Settings:
         )
     )
     # Display conversion used for server-recorded results (see display_score.py).
-    display_map: str = field(default_factory=lambda: os.environ.get("DISPLAY_MAP", "heuristic-2.4-4.0-v1"))
+    # Use the active model package's declared 1–5 native range plus the small
+    # display offset used by the client. The legacy 2.4–4.0 heuristic floors
+    # any score at or below 2.4 to zero.
+    display_map: str = field(default_factory=lambda: os.environ.get("DISPLAY_MAP", "linear-1-5-plus-10-v1"))
 
     # Anonymous cookie session. Secure (`__Host-mog_session`) by default; set
     # SESSION_COOKIE_SECURE=0 only for explicit plain-HTTP localhost development,

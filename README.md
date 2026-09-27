@@ -30,6 +30,16 @@ VITE_SCAN_DEBUG=1 VITE_SCORE_ENDPOINT="http://localhost:8000/v1/score" npm run d
 
 The Face Landmarker WASM/model are loaded at runtime from the official MediaPipe CDN and model bucket. Production deployment should serve the app over HTTPS, configure the service CORS origin precisely, and pin/audit those runtime assets before launch.
 
+## How displayed scores work
+
+The scan only sends selected, face-centered crops after the local quality gate.
+For a live scan, it scores three crops and uses the median native result; an
+upload uses one crop. The active model's native range is 1–5. The displayed
+score is a linear conversion of that native value, then gets a small 10-point
+display boost (capped at 100). Values are rounded to the nearest integer and
+constrained to that range. This is a temporary display conversion, not a
+percentile, diagnosis, or validated assessment of a person.
+
 ## Shared leaderboard and Latest Mogs (anonymous social)
 
 Set `VITE_MOG_API_BASE=/api/mog` to turn on the shared leaderboard and the

@@ -167,19 +167,19 @@ function median(values: number[]) {
   return sorted[Math.floor(sorted.length / 2)];
 }
 
-// Heuristic display calibration. With the face-crop fix, real-face native scores
-// from this model land around ~3.0-3.2 (measured on a live face at normal/close
-// distance). The band is shifted slightly stricter: native [2.4, 4.0] across
-// 0-100 (span 1.6), so a typical face sits at the lower half of mid-scale and the
-// higher tiers take a genuinely higher native score. Still an unvalidated stand-in
-// tuned to one tester — replace with a data-driven percentile calibration
-// (measured over a consented set) before any real launch.
-const DISPLAY_NATIVE_MIN = 2.4;
-const DISPLAY_NATIVE_MAX = 4.0;
+// Display scores use the full native range declared by the active model package,
+// then apply a small +10 presentation offset (capped at 100). This is a
+// placeholder conversion, not a percentile or a validated population calibration.
+//
+// Keeping this aligned with the server's `linear-1-5-plus-10-v1` map matters:
+// registered and local scans must show the same result for the same native score.
+const DISPLAY_NATIVE_MIN = 1.0;
+const DISPLAY_NATIVE_MAX = 5.0;
+const DISPLAY_SCORE_OFFSET = 10;
 
 function displayScore(nativeScore: number) {
   const span = DISPLAY_NATIVE_MAX - DISPLAY_NATIVE_MIN;
-  return Math.round(Math.min(100, Math.max(0, ((nativeScore - DISPLAY_NATIVE_MIN) / span) * 100)));
+  return Math.round(Math.min(100, Math.max(0, ((nativeScore - DISPLAY_NATIVE_MIN) / span) * 100 + DISPLAY_SCORE_OFFSET)));
 }
 
 function tierFor(score: number) {
@@ -491,7 +491,7 @@ function App() {
       nativeScores: nativeScores.map((value) => Number(value.toFixed(3))),
       aggregation: 'median',
       medianNativeScore: Number(medianNativeScore.toFixed(3)),
-      displayFormula: 'clamp(round(((native - 2.4) / 1.6) * 100), 0, 100)',
+      displayFormula: 'clamp(round(((native - 1.0) / 4.0) * 100 + 10), 0, 100)',
       displayScore: score,
       tier: serverResult?.tier ?? tierFor(score),
       modelVersion,
@@ -1001,6 +1001,13 @@ function App() {
           <div className="actions"><button className="primary" onClick={scanAgain}>Run it back <span aria-hidden="true">↗</span></button><button className="secondary" onClick={() => { setLeaderboardError(''); if (!displayName && session.displayName) setDisplayName(session.displayName); setSaveOpen(true); }}>Save leaderboard</button>{canShareResult && <button className="secondary" onClick={openShareForResult}>Share as mog <span aria-hidden="true">↗</span></button>}</div>
           <section className="level-up">
             {tierPlaybooks.slice(Math.max(0, tierPlaybooks.findIndex((playbook) => playbook.tier === result.tier) + 1), Math.max(0, tierPlaybooks.findIndex((playbook) => playbook.tier === result.tier) + 2)).map((playbook) => <details key={playbook.tier}><summary>ASCENDING TO {playbook.tier} <span>+</span></summary><p>General style ideas, not an explanation of your score.</p><ol>{playbook.steps.map((step) => <li key={step}>{step}</li>)}</ol></details>)}
+          </section>
+          <section className="score-explainer">
+            <details>
+              <summary>HOW THIS SCORE IS CALCULATED <span>+</span></summary>
+              <p>We select three steady, well-framed face crops. The model gives each crop a native score from 1 to 5; we use the middle score so one odd frame has less influence.</p>
+              <p>That middle score is shown on a simple 0–100 scale with a small presentation boost: the linear value gets 10 points, capped at 100. It is not a percentile, diagnosis, or measurement of your worth.</p>
+            </details>
           </section>
           <section className="receipt-block">
             <p className="eyebrow">YOUR RECEIPT</p>
