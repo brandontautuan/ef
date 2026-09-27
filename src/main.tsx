@@ -86,12 +86,15 @@ function geometricGate(faces: Landmark[][]): QualityAssessment {
   return { eligible: true, failures: [] };
 }
 
-// Crop an aligned, face-centered square into the 640x640 send canvas, so camera
-// and upload feed the model identically. The face is rotated so the eye line is
-// level and scaled to a consistent size (landmark box + 50% margin), which keeps
-// the input within the model's frontal training distribution and removes
-// tilt/scale variance between scans. Falls back to a centered square with no face.
-const FACE_MARGIN = 0.5;
+// Crop an aligned face into the 640x640 send canvas, so camera and upload feed
+// the model identically. The face is rotated so the eye line is level and scaled
+// by INTER-OCULAR DISTANCE (not the landmark box) with the eyes pinned to a
+// canonical position. Eye distance barely moves with expression, hair, or an open
+// mouth, so the crop's zoom/framing — and thus the score — is far more repeatable
+// than a bounding-box crop. Falls back to the box (no eyes) or a centered square.
+const FACE_MARGIN = 0.5;              // used only by the no-eye bbox fallback
+const OUTPUT_EYE_DISTANCE = 142;      // px between the eyes in the 640 crop (≈ prior zoom)
+const OUTPUT_EYE_Y = 296;             // canonical eye-line height in the 640 crop
 function cropFaceToCanvas(source: CanvasImageSource, sourceW: number, sourceH: number, face: Landmark[] | undefined, canvas: HTMLCanvasElement): boolean {
   if (sourceW === 0 || sourceH === 0) return false;
   canvas.width = 640;
@@ -99,26 +102,30 @@ function cropFaceToCanvas(source: CanvasImageSource, sourceW: number, sourceH: n
   const context = canvas.getContext('2d');
   if (!context) return false;
   context.fillStyle = '#000';
-  context.fillRect(0, 0, 640, 640); // letterbox any area rotation brings outside the source
-  if (face && face.length) {
+  context.fillRect(0, 0, 640, 640); // letterbox any area alignment brings outside the source
+  const leftEye = face?.[33]; const rightEye = face?.[263];
+  if (face && face.length && leftEye && rightEye) {
+    const lx = leftEye.x * sourceW; const ly = leftEye.y * sourceH;
+    const rx = rightEye.x * sourceW; const ry = rightEye.y * sourceH;
+    const eyeMidX = (lx + rx) / 2; const eyeMidY = (ly + ry) / 2;
+    const interOcular = Math.hypot(rx - lx, ry - ly) || 1;
+    const angle = Math.atan2(ry - ly, rx - lx);
+    const scale = OUTPUT_EYE_DISTANCE / interOcular;
+    context.save();
+    context.translate(320, OUTPUT_EYE_Y); // eye midpoint -> canonical position
+    context.rotate(-angle);               // level the eyes
+    context.scale(scale, scale);          // normalize by inter-ocular distance
+    context.translate(-eyeMidX, -eyeMidY);
+    context.drawImage(source, 0, 0);
+    context.restore();
+  } else if (face && face.length) {
+    // Fallback (no eye landmarks): face bbox center + margin, rotation skipped.
     const xs = face.map((p) => p.x); const ys = face.map((p) => p.y);
     const left = Math.min(...xs) * sourceW; const right = Math.max(...xs) * sourceW;
     const top = Math.min(...ys) * sourceH; const bottom = Math.max(...ys) * sourceH;
     const cx = (left + right) / 2; const cy = (top + bottom) / 2;
     const boxSide = Math.min(Math.max(right - left, bottom - top) * (1 + FACE_MARGIN), sourceW, sourceH);
-    // Roll angle from the eye landmarks (in source pixels, so aspect is honored).
-    const leftEye = face[33]; const rightEye = face[263];
-    const angle = leftEye && rightEye
-      ? Math.atan2((rightEye.y - leftEye.y) * sourceH, (rightEye.x - leftEye.x) * sourceW)
-      : 0;
-    const scale = 640 / boxSide;
-    context.save();
-    context.translate(320, 320);   // face center -> canvas center
-    context.rotate(-angle);        // level the eyes
-    context.scale(scale, scale);   // normalize face size
-    context.translate(-cx, -cy);
-    context.drawImage(source, 0, 0);
-    context.restore();
+    context.drawImage(source, cx - boxSide / 2, cy - boxSide / 2, boxSide, boxSide, 0, 0, 640, 640);
   } else {
     const sSide = Math.min(sourceW, sourceH);
     context.drawImage(source, (sourceW - sSide) / 2, (sourceH - sSide) / 2, sSide, sSide, 0, 0, 640, 640);
